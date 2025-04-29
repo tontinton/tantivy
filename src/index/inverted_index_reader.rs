@@ -6,8 +6,6 @@ use fnv::FnvHashSet;
 #[cfg(feature = "quickwit")]
 use futures_util::{FutureExt, StreamExt, TryStreamExt};
 #[cfg(feature = "quickwit")]
-use itertools::Itertools;
-#[cfg(feature = "quickwit")]
 use tantivy_fst::automaton::{AlwaysMatch, Automaton};
 
 use crate::directory::FileSlice;
@@ -330,6 +328,54 @@ impl InvertedIndexReader {
         Ok(true)
     }
 
+    fn coalesce_and_send_ranges<I>(
+        stream: I,
+        posting_sender: impl Fn(std::ops::Range<usize>) -> std::io::Result<()>,
+        positions_sender: impl Fn(std::ops::Range<usize>) -> std::io::Result<()>,
+        merge_gap: usize,
+    ) -> std::io::Result<()>
+    where
+        I: Iterator<Item = (std::ops::Range<usize>, std::ops::Range<usize>)>,
+    {
+        let mut curr_postings: Option<std::ops::Range<usize>> = None;
+        let mut curr_positions: Option<std::ops::Range<usize>> = None;
+
+        for (postings_range, positions_range) in stream {
+            curr_postings = match curr_postings.take() {
+                Some(mut curr) if curr.end + merge_gap >= postings_range.start => {
+                    curr.end = curr.end.max(postings_range.end);
+                    Some(curr)
+                }
+                Some(prev) => {
+                    posting_sender(prev)?;
+                    Some(postings_range)
+                }
+                None => Some(postings_range),
+            };
+
+            curr_positions = match curr_positions.take() {
+                Some(mut curr) if curr.end + merge_gap >= positions_range.start => {
+                    curr.end = curr.end.max(positions_range.end);
+                    Some(curr)
+                }
+                Some(prev) => {
+                    positions_sender(prev)?;
+                    Some(positions_range)
+                }
+                None => Some(positions_range),
+            };
+        }
+
+        if let Some(p) = curr_postings {
+            posting_sender(p)?;
+        }
+        if let Some(pos) = curr_positions {
+            positions_sender(pos)?;
+        }
+
+        Ok(())
+    }
+
     /// Warmup a block postings given a range of `Term`s.
     /// This method is for an advanced usage only.
     ///
@@ -341,8 +387,7 @@ impl InvertedIndexReader {
     >(
         &self,
         automaton: A,
-        // with_positions: bool, at the moment we have no use for it, and supporting it would add
-        // complexity to the coalesce
+        with_positions: bool,
         executor: E,
     ) -> io::Result<bool>
     where
@@ -357,7 +402,8 @@ impl InvertedIndexReader {
             .get_term_range_async(.., automaton.clone(), None, MERGE_HOLES_UNDER_BYTES)
             .await?;
 
-        let (sender, posting_ranges_to_load_stream) = futures_channel::mpsc::unbounded();
+        let (posting_sender, posting_ranges_to_load_stream) = futures_channel::mpsc::unbounded();
+        let (positions_sender, positions_ranges_to_load_stream) = futures_channel::mpsc::unbounded();
         let termdict = self.termdict.clone();
         let cpu_bound_task = move || {
             // then we build a 2nd iterator, this one with no holes, so we don't go through blocks
@@ -370,25 +416,18 @@ impl InvertedIndexReader {
             // more leaky abstraction-wise, but a lot better than the alternative
             let mut stream = termdict.search(automaton).into_stream()?;
 
-            // we could do without an iterator, but this allows us access to coalesce which simplify
-            // things
-            let posting_ranges_iter =
-                std::iter::from_fn(move || stream.next().map(|(_k, v)| v.postings_range.clone()));
+            Self::coalesce_and_send_ranges(
+                std::iter::from_fn(move || stream.next().map(|(_k, v)| (v.postings_range.clone(), v.positions_range.clone()))), 
+                |r| posting_sender.unbounded_send(r).map_err(|_| std::io::Error::other("failed to send posting range")),
+                |r| {
+                    if !with_positions {
+                        return Ok(());
+                    }
+                    positions_sender.unbounded_send(r).map_err(|_| std::io::Error::other("failed to send positions range"))
+                },
+                MERGE_HOLES_UNDER_BYTES,
+            )?;
 
-            let merged_posting_ranges_iter = posting_ranges_iter.coalesce(|range1, range2| {
-                if range1.end + MERGE_HOLES_UNDER_BYTES >= range2.start {
-                    Ok(range1.start..range2.end)
-                } else {
-                    Err((range1, range2))
-                }
-            });
-
-            for posting_range in merged_posting_ranges_iter {
-                if let Err(_) = sender.unbounded_send(posting_range) {
-                    // this should happen only when search is cancelled
-                    return Err(io::Error::other("failed to send posting range back"));
-                }
-            }
             Ok(())
         };
         let task_handle = executor(Box::new(cpu_bound_task));
@@ -401,11 +440,19 @@ impl InvertedIndexReader {
             })
             .buffer_unordered(5)
             .try_collect::<Vec<()>>();
+        let positions_downloader = positions_ranges_to_load_stream
+            .map(|positions_slice| {
+                self.positions_file_slice
+                    .read_bytes_slice_async(positions_slice)
+                    .map(|result| result.map(|_slice| ()))
+            })
+            .buffer_unordered(5)
+            .try_collect::<Vec<()>>();
 
-        let (_, slices_downloaded) =
-            futures_util::future::try_join(task_handle, posting_downloader).await?;
+        let (_, posting_slices_downloaded, positions_slices_downloaded) =
+            futures_util::future::try_join3(task_handle, posting_downloader, positions_downloader).await?;
 
-        Ok(!slices_downloaded.is_empty())
+        Ok(!posting_slices_downloaded.is_empty() || !positions_slices_downloaded.is_empty())
     }
 
     /// Warmup the block postings for all terms.
