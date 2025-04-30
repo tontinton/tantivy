@@ -22,7 +22,7 @@ use crate::schema::{Field, IndexRecordOption, Term, Type};
 #[derive(Clone, Debug)]
 pub struct RegexPhraseQuery {
     field: Field,
-    phrase_terms: Vec<(usize, String)>,
+    phrase_terms: Vec<(usize, Term)>,
     slop: u32,
     max_expansions: u32,
 }
@@ -58,7 +58,23 @@ impl RegexPhraseQuery {
     /// Creates a new `RegexPhraseQuery` given a list of terms, their offsets and a slop
     pub fn new_with_offset_and_slop(
         field: Field,
-        mut terms: Vec<(usize, String)>,
+        terms: Vec<(usize, String)>,
+        slop: u32,
+    ) -> RegexPhraseQuery {
+        RegexPhraseQuery::new_with_term_offset_and_slop(
+            field,
+            terms
+                .into_iter()
+                .map(|(offset, term)| (offset, Term::from_field_text(field, &term)))
+                .collect(),
+            slop,
+        )
+    }
+
+    /// Creates a new `RegexPhraseQuery` given a list of tantivy terms, their offsets and a slop
+    pub fn new_with_term_offset_and_slop(
+        field: Field,
+        mut terms: Vec<(usize, Term)>,
         slop: u32,
     ) -> RegexPhraseQuery {
         assert!(
@@ -107,7 +123,7 @@ impl RegexPhraseQuery {
     pub fn phrase_terms(&self) -> Vec<Term> {
         self.phrase_terms
             .iter()
-            .map(|(_, term)| Term::from_field_text(self.field, term))
+            .map(|(_, term)| term.clone())
             .collect::<Vec<Term>>()
     }
 
@@ -121,9 +137,9 @@ impl RegexPhraseQuery {
     ) -> crate::Result<RegexPhraseWeight> {
         let schema = enable_scoring.schema();
         let field_type = schema.get_field_entry(self.field).field_type().value_type();
-        if field_type != Type::Str {
+        if field_type != Type::Str && field_type != Type::Json {
             return Err(crate::TantivyError::SchemaError(format!(
-                "RegexPhraseQuery can only be used with a field of type text currently, but got \
+                "RegexPhraseQuery can only be used with a field of type text or json currently, but got \
                  {:?}",
                 field_type
             )));
