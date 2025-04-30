@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use common::BitSet;
 use tantivy_fst::Regex;
 
@@ -11,7 +9,7 @@ use crate::query::bm25::Bm25Weight;
 use crate::query::explanation::does_not_match;
 use crate::query::union::{BitSetPostingUnion, SimpleUnion};
 use crate::query::{AutomatonWeight, BitSetDocSet, EmptyScorer, Explanation, Scorer, Weight};
-use crate::schema::{Field, IndexRecordOption};
+use crate::schema::{Field, IndexRecordOption, Term, Type};
 use crate::{DocId, DocSet, InvertedIndexReader, Score};
 
 type UnionType = SimpleUnion<Box<dyn Postings + 'static>>;
@@ -20,7 +18,7 @@ type UnionType = SimpleUnion<Box<dyn Postings + 'static>>;
 /// See RegexPhraseWeight::get_union_from_term_infos for some design decisions.
 pub struct RegexPhraseWeight {
     field: Field,
-    phrase_terms: Vec<(usize, String)>,
+    phrase_terms: Vec<(usize, Term)>,
     similarity_weight_opt: Option<Bm25Weight>,
     slop: u32,
     max_expansions: u32,
@@ -31,7 +29,7 @@ impl RegexPhraseWeight {
     /// If `similarity_weight_opt` is None, then scoring is disabled
     pub fn new(
         field: Field,
-        phrase_terms: Vec<(usize, String)>,
+        phrase_terms: Vec<(usize, Term)>,
         similarity_weight_opt: Option<Bm25Weight>,
         max_expansions: u32,
         slop: u32,
@@ -54,6 +52,45 @@ impl RegexPhraseWeight {
         Ok(FieldNormReader::constant(reader.max_doc(), 1))
     }
 
+    fn term_to_regex_automaton(term: &Term) -> crate::Result<AutomatonWeight<Regex>> {
+        let term_value = term.value();
+
+        let term_text = if term_value.typ() == Type::Json {
+            if let Some(json_path_type) = term_value.json_path_type() {
+                if json_path_type != Type::Str {
+                    return Err(crate::TantivyError::InvalidArgument(format!(
+                        "The regex phrase query requires a string path type for a json term. \
+                         Found {json_path_type:?}"
+                    )));
+                }
+            }
+
+            std::str::from_utf8(term.serialized_value_bytes()).map_err(|_| {
+                crate::TantivyError::InvalidArgument(
+                    "Failed to convert json term value bytes to utf8 string.".to_string(),
+                )
+            })?
+        } else {
+            term_value.as_str().ok_or_else(|| {
+                crate::TantivyError::InvalidArgument(
+                    "The regex phrase query requires a string term.".to_string(),
+                )
+            })?
+        };
+
+        let regex = Regex::new(term_text)
+            .map_err(|e| crate::TantivyError::InvalidArgument(format!("Invalid regex: {e}")))?;
+        if let Some((json_path_bytes, _)) = term_value.as_json() {
+            Ok(AutomatonWeight::new_for_json_path(
+                term.field(),
+                regex,
+                json_path_bytes,
+            ))
+        } else {
+            Ok(AutomatonWeight::new(term.field(), regex))
+        }
+    }
+
     pub(crate) fn phrase_scorer(
         &self,
         reader: &SegmentReader,
@@ -68,11 +105,7 @@ impl RegexPhraseWeight {
         let inverted_index = reader.inverted_index(self.field)?;
         let mut num_terms = 0;
         for &(offset, ref term) in &self.phrase_terms {
-            let regex = Regex::new(term)
-                .map_err(|e| crate::TantivyError::InvalidArgument(format!("Invalid regex: {e}")))?;
-
-            let automaton: AutomatonWeight<Regex> =
-                AutomatonWeight::new(self.field, Arc::new(regex));
+            let automaton = Self::term_to_regex_automaton(term)?;
             let term_infos = automaton.get_match_term_infos(reader)?;
             // If term_infos is empty, the phrase can not match any documents.
             if term_infos.is_empty() {
