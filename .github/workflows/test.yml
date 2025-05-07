@@ -2,9 +2,9 @@ name: Unit tests
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, vega-main ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, vega-main ]
 
 env:
   CARGO_TERM_COLOR: always
