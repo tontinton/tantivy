@@ -173,7 +173,7 @@ mod tests {
         assert_eq!(fieldnorm_reader.fieldnorm(1), 2);
         assert_eq!(fieldnorm_reader.fieldnorm(2), 3);
         assert_eq!(fieldnorm_reader.fieldnorm(3), 4);
-        assert_eq!(fieldnorm_reader.fieldnorm(4), 983_064);
+        assert_eq!(fieldnorm_reader.fieldnorm(4), 255);
     }
 
     #[test]
@@ -188,7 +188,7 @@ mod tests {
     fn test_const_fieldnorm_reader_large_fieldnorm_id() {
         let fieldnorm_reader = FieldNormReader::constant(1_000_000u32, 300u32);
         assert_eq!(fieldnorm_reader.num_docs(), 1_000_000u32);
-        assert_eq!(fieldnorm_reader.fieldnorm(0u32), 280u32);
-        assert_eq!(fieldnorm_reader.fieldnorm_id(0u32), 72u8);
+        assert_eq!(fieldnorm_reader.fieldnorm(0u32), 255u32); // min(300, 255) == 255
+        assert_eq!(fieldnorm_reader.fieldnorm_id(0u32), 255u8);
     }
 }

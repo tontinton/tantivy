@@ -1,15 +1,33 @@
+// Note: FIELD_NORMS_TABLE is defined below for reference but is no longer used.
+//
+// Field norms are traditionally used to approximate the number of terms (tokens)
+// in a field’s value and are leveraged in BM25 scoring to boost relevance
+// based on field length.
+//
+// We decided to "abuse" field norms to support exact phrase matching by
+// filtering out documents with fewer terms than required.
+//
+// - We aim for field norms to reflect the actual number of terms, especially for short fields,
+//   which are more likely to be used in phrase matching.
+// - For fields longer than 256 terms, we simply return 255 (u8::MAX). While we could theoretically
+//   store field norms as `u16`, we prefer a smaller index size over exact match accuracy for long
+//   fields, as we don’t expect users to perform phrase matching on such fields.
+// - We are not concerned about messing the scoring logic, as we always sort the query results by
+//   timestamp so scoring are never used.
+
 #[inline]
 pub fn id_to_fieldnorm(id: u8) -> u32 {
-    FIELD_NORMS_TABLE[id as usize]
+    id as u32
+    // FIELD_NORMS_TABLE[id as usize]
 }
 
 #[inline]
 pub fn fieldnorm_to_id(fieldnorm: u32) -> u8 {
-    FIELD_NORMS_TABLE
-        .binary_search(&fieldnorm)
-        .unwrap_or_else(|idx| idx - 1) as u8
+    fieldnorm.min(255) as u8
+    // FIELD_NORMS_TABLE.binary_search(&fieldnorm).unwrap_or_else(|idx| idx - 1) as u8
 }
 
+#[allow(dead_code)]
 pub const FIELD_NORMS_TABLE: [u32; 256] = [
     0,
     1,
@@ -272,24 +290,16 @@ pub const FIELD_NORMS_TABLE: [u32; 256] = [
 #[cfg(test)]
 mod tests {
 
-    use super::{fieldnorm_to_id, id_to_fieldnorm, FIELD_NORMS_TABLE};
+    use super::{fieldnorm_to_id, id_to_fieldnorm};
 
     #[test]
-    fn test_decode_code() {
-        assert_eq!(fieldnorm_to_id(0), 0);
-        assert_eq!(fieldnorm_to_id(1), 1);
-        for i in 0..41 {
-            assert_eq!(fieldnorm_to_id(i), i as u8);
+    fn test_decode_logic() {
+        for id in 0u8..=255 {
+            assert_eq!(fieldnorm_to_id(id as u32), id);
+            assert_eq!(id_to_fieldnorm(id), id as u32);
         }
-        assert_eq!(fieldnorm_to_id(41), 40);
-        assert_eq!(fieldnorm_to_id(42), 41);
-        for id in 43..256 {
-            let field_norm = FIELD_NORMS_TABLE[id];
-            assert_eq!(id_to_fieldnorm(id as u8), field_norm);
-            assert_eq!(fieldnorm_to_id(field_norm), id as u8);
-            assert_eq!(fieldnorm_to_id(field_norm - 1), id as u8 - 1);
-            assert_eq!(fieldnorm_to_id(field_norm + 1), id as u8);
-        }
+
+        assert_eq!(fieldnorm_to_id(1_000), 255);
     }
 
     #[test]
@@ -305,7 +315,7 @@ mod tests {
         // The array is defined as a const,
         // and we check in the unit test that the const
         // value is matching the logic.
-        const IDENTITY_PART: u8 = 24u8;
+        const IDENTITY_PART: u8 = u8::MAX;
         fn decode_field_norm_exp_part(b: u8) -> u32 {
             let bits = (b & 0b00000111) as u32;
             let shift = b >> 3;
@@ -322,8 +332,8 @@ mod tests {
                 (IDENTITY_PART as u32) + decode_field_norm_exp_part(b - IDENTITY_PART)
             }
         }
-        for i in 0..256 {
-            assert_eq!(FIELD_NORMS_TABLE[i], decode_fieldnorm_byte(i as u8));
+        for i in 0..=255 {
+            assert_eq!(id_to_fieldnorm(i), decode_fieldnorm_byte(i));
         }
     }
 }

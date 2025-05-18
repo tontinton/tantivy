@@ -147,7 +147,7 @@ mod tests {
             bm25_weight,
         );
         let max_scorer = term_scorer.max_score();
-        crate::assert_nearly_equals!(max_scorer, 1.3990127);
+        crate::assert_nearly_equals!(max_scorer, 1.5249238);
         assert_eq!(term_scorer.doc(), 2);
         assert_eq!(term_scorer.term_freq(), 3);
         assert_nearly_equals!(term_scorer.block_max_score(), 1.3676447);
@@ -159,7 +159,7 @@ mod tests {
         assert_eq!(term_scorer.advance(), 7);
         assert_eq!(term_scorer.doc(), 7);
         assert_eq!(term_scorer.term_freq(), 8);
-        assert_nearly_equals!(term_scorer.score(), 0.72015285);
+        assert_nearly_equals!(term_scorer.score(), 0.7051671);
         assert_eq!(term_scorer.advance(), TERMINATED);
         Ok(())
     }
@@ -246,7 +246,7 @@ mod tests {
         assert_nearly_equals!(docs.block_max_score(), 3.4597192);
         docs.shallow_seek(256);
         // the block is not loaded yet.
-        assert_nearly_equals!(docs.block_max_score(), 5.2971773);
+        assert_nearly_equals!(docs.block_max_score(), 5.5355506);
         assert_eq!(256, docs.seek(256));
         assert_nearly_equals!(docs.block_max_score(), 3.9539647);
     }
