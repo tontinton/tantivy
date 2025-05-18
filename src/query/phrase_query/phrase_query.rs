@@ -24,6 +24,7 @@ pub struct PhraseQuery {
     field: Field,
     phrase_terms: Vec<(usize, Term)>,
     slop: u32,
+    match_entire_field: bool,
 }
 
 impl PhraseQuery {
@@ -60,6 +61,7 @@ impl PhraseQuery {
             field,
             phrase_terms: terms,
             slop,
+            match_entire_field: false,
         }
     }
 
@@ -79,6 +81,11 @@ impl PhraseQuery {
     /// By default the slop is 0 meaning query terms need to be adjacent.
     pub fn set_slop(&mut self, value: u32) {
         self.slop = value;
+    }
+
+    /// Set whether the phrase must match the *entire* field content exactly.
+    pub fn set_match_entire_field(&mut self, value: bool) {
+        self.match_entire_field = value;
     }
 
     /// The [`Field`] this `PhraseQuery` is targeting.
@@ -124,7 +131,11 @@ impl PhraseQuery {
             } => Some(Bm25Weight::for_terms(statistics_provider, &terms)?),
             EnableScoring::Disabled { .. } => None,
         };
-        let mut weight = PhraseWeight::new(self.phrase_terms.clone(), bm25_weight_opt);
+        let mut weight = PhraseWeight::new(
+            self.phrase_terms.clone(),
+            bm25_weight_opt,
+            self.match_entire_field,
+        );
         if self.slop > 0 {
             weight.slop(self.slop);
         }

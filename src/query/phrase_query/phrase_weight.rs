@@ -12,6 +12,7 @@ pub struct PhraseWeight {
     phrase_terms: Vec<(usize, Term)>,
     similarity_weight_opt: Option<Bm25Weight>,
     slop: u32,
+    match_entire_field: bool,
 }
 
 impl PhraseWeight {
@@ -20,18 +21,21 @@ impl PhraseWeight {
     pub fn new(
         phrase_terms: Vec<(usize, Term)>,
         similarity_weight_opt: Option<Bm25Weight>,
+        match_entire_field: bool,
     ) -> PhraseWeight {
         let slop = 0;
         PhraseWeight {
             phrase_terms,
             similarity_weight_opt,
             slop,
+            match_entire_field,
         }
     }
 
     fn fieldnorm_reader(&self, reader: &SegmentReader) -> crate::Result<FieldNormReader> {
         let field = self.phrase_terms[0].1.field();
-        if self.similarity_weight_opt.is_some() {
+        // exact matches and similarity weight depends on field norms
+        if self.match_entire_field || self.similarity_weight_opt.is_some() {
             if let Some(fieldnorm_reader) = reader.fieldnorms_readers().get_field(field)? {
                 return Ok(fieldnorm_reader);
             }
@@ -60,12 +64,21 @@ impl PhraseWeight {
                 return Ok(None);
             }
         }
-        Ok(Some(PhraseScorer::new(
-            term_postings_list,
-            similarity_weight_opt,
-            fieldnorm_reader,
-            self.slop,
-        )))
+
+        if self.match_entire_field {
+            Ok(Some(PhraseScorer::new_exact(
+                term_postings_list,
+                similarity_weight_opt,
+                fieldnorm_reader,
+            )))
+        } else {
+            Ok(Some(PhraseScorer::new(
+                term_postings_list,
+                similarity_weight_opt,
+                fieldnorm_reader,
+                self.slop,
+            )))
+        }
     }
 
     pub fn slop(&mut self, slop: u32) {

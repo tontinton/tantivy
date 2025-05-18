@@ -55,6 +55,7 @@ pub struct PhraseScorer<TPostings: Postings> {
     left_slops: Vec<u8>,
     positions_buffer: Vec<u32>,
     slops_buffer: Vec<u8>,
+    match_entire_field: bool,
 }
 
 /// Returns true if and only if the two sorted arrays contain a common element
@@ -358,6 +359,22 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
             fieldnorm_reader,
             slop,
             0,
+            false,
+        )
+    }
+
+    pub fn new_exact(
+        term_postings: Vec<(usize, TPostings)>,
+        similarity_weight_opt: Option<Bm25Weight>,
+        fieldnorm_reader: FieldNormReader,
+    ) -> PhraseScorer<TPostings> {
+        Self::new_with_offset(
+            term_postings,
+            similarity_weight_opt,
+            fieldnorm_reader,
+            0,
+            0,
+            true,
         )
     }
 
@@ -367,6 +384,7 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
         fieldnorm_reader: FieldNormReader,
         slop: u32,
         offset: usize,
+        match_entire_field: bool,
     ) -> PhraseScorer<TPostings> {
         let max_offset = term_postings_with_offset
             .iter()
@@ -393,6 +411,7 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
             left_slops: Vec::with_capacity(100),
             slops_buffer: Vec::with_capacity(100),
             positions_buffer: Vec::with_capacity(100),
+            match_entire_field: match_entire_field,
         };
         if scorer.doc() != TERMINATED && !scorer.phrase_match() {
             scorer.advance();
@@ -463,6 +482,23 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
             self.intersection_docset
                 .docset_mut_specialized(0)
                 .positions(&mut self.left_positions);
+
+            // For exact matching, ensure the phrase covers the entire field content
+            if self.match_entire_field {
+                let estimated_field_len = self.fieldnorm_reader.fieldnorm(self.doc());
+
+                // Keep only positions where the first term appears at position 0 (offset by the
+                // number of terms)
+                self.left_positions
+                    .retain(|&pos| pos == (self.num_terms as u32) - 1);
+
+                // Note that `estimated_field_len = min(actual_field_num_terms 255)`
+                // so will match longer values that starts with the queried phrase
+                if estimated_field_len > self.num_terms as u32 || self.left_positions.is_empty() {
+                    return;
+                }
+            }
+
             if self.has_slop() {
                 self.left_slops.clear();
             }
