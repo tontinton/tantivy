@@ -492,15 +492,13 @@ impl InvertedIndexReader {
 
 #[cfg(all(test, feature = "quickwit"))]
 mod test {
-    use super::*;
     use std::cell::RefCell;
+
+    use super::*;
 
     #[test]
     fn test_single_merge() {
-        let input = vec![
-            (0..10, 100..110),
-            (11..20, 111..120),
-        ];
+        let input = vec![(0..10, 100..110), (11..20, 111..120)];
         let merge_gap = 2;
 
         let postings = RefCell::new(vec![]);
@@ -515,7 +513,13 @@ mod test {
             Ok(())
         };
 
-        InvertedIndexReader::coalesce_and_send_ranges(input.into_iter(), posting_sender, positions_sender, merge_gap).unwrap();
+        InvertedIndexReader::coalesce_and_send_ranges(
+            input.into_iter(),
+            posting_sender,
+            positions_sender,
+            merge_gap,
+        )
+        .unwrap();
 
         assert_eq!(postings.into_inner(), vec![0..20]);
         assert_eq!(positions.into_inner(), vec![100..120]);
@@ -541,7 +545,13 @@ mod test {
             Ok(())
         };
 
-        InvertedIndexReader::coalesce_and_send_ranges(input.into_iter(), posting_sender, positions_sender, merge_gap).unwrap();
+        InvertedIndexReader::coalesce_and_send_ranges(
+            input.into_iter(),
+            posting_sender,
+            positions_sender,
+            merge_gap,
+        )
+        .unwrap();
 
         assert_eq!(postings.into_inner(), vec![0..10, 20..30]);
         assert_eq!(positions.into_inner(), vec![100..110, 120..130]);
@@ -549,11 +559,7 @@ mod test {
 
     #[test]
     fn test_multiple_merges_and_flush_at_end() {
-        let input = vec![
-            (0..10, 100..110),
-            (11..15, 111..115),
-            (30..40, 130..140),
-        ];
+        let input = vec![(0..10, 100..110), (11..15, 111..115), (30..40, 130..140)];
         let merge_gap = 2;
 
         let postings = RefCell::new(vec![]);
@@ -568,7 +574,13 @@ mod test {
             Ok(())
         };
 
-        InvertedIndexReader::coalesce_and_send_ranges(input.into_iter(), posting_sender, positions_sender, merge_gap).unwrap();
+        InvertedIndexReader::coalesce_and_send_ranges(
+            input.into_iter(),
+            posting_sender,
+            positions_sender,
+            merge_gap,
+        )
+        .unwrap();
 
         assert_eq!(postings.into_inner(), vec![0..15, 30..40]);
         assert_eq!(positions.into_inner(), vec![100..115, 130..140]);
@@ -591,7 +603,13 @@ mod test {
             Ok(())
         };
 
-        InvertedIndexReader::coalesce_and_send_ranges(input.into_iter(), posting_sender, positions_sender, merge_gap).unwrap();
+        InvertedIndexReader::coalesce_and_send_ranges(
+            input.into_iter(),
+            posting_sender,
+            positions_sender,
+            merge_gap,
+        )
+        .unwrap();
 
         assert!(postings.borrow().is_empty());
         assert!(positions.borrow().is_empty());
