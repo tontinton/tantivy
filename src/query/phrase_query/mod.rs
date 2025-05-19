@@ -160,6 +160,57 @@ pub(crate) mod tests {
     }
 
     #[test]
+    pub fn test_phrase_query_entire_field_match() -> crate::Result<()> {
+        let numbers_255: Vec<String> = (1..=u8::MAX).map(|i| i.to_string()).collect();
+        let mut numbers_256 = numbers_255.clone();
+        numbers_256.push("256".to_string());
+
+        let index: Index =
+            create_index(&["a b c d", &numbers_255.join(" "), &numbers_256.join(" ")])?;
+        let schema: Schema = index.schema();
+        let text_field = schema.get_field("text").unwrap();
+        let searcher = index.reader()?.searcher();
+        // Helper function that creates a phrase query from texts, executes it, and returns matching
+        // doc IDs
+        let test_query = |texts: Vec<&str>, match_entire_field: bool| {
+            let terms: Vec<Term> = texts
+                .iter()
+                .map(|text| Term::from_field_text(text_field, text))
+                .collect();
+            let mut phrase_query = PhraseQuery::new(terms);
+            phrase_query.set_match_entire_field(match_entire_field);
+            let test_fruits = searcher
+                .search(&phrase_query, &TEST_COLLECTOR_WITH_SCORE)
+                .unwrap();
+            test_fruits
+                .docs()
+                .iter()
+                .map(|docaddr| docaddr.doc_id)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(test_query(vec!["b", "c", "d"], false), vec![0]);
+
+        // Sanity checks for entire field matching
+        assert_eq!(test_query(vec!["b", "c", "d"], true), Vec::<u32>::new()); // Missing a at the start
+        assert_eq!(test_query(vec!["a", "b", "c"], true), Vec::<u32>::new()); // Missing d at the end
+        assert_eq!(test_query(vec!["a", "b", "c", "d"], true), vec![0]); // Matches the entire field
+
+        // Searching for 255 terms matches the doc with 256 terms that starts with the queried
+        // phrase as 256 > u8::MAX (field norm limit)
+        assert_eq!(
+            test_query(numbers_255.iter().map(String::as_str).collect(), true),
+            vec![1, 2]
+        );
+        assert_eq!(
+            test_query(numbers_256.iter().map(String::as_str).collect(), true),
+            vec![2]
+        );
+
+        Ok(())
+    }
+
+    #[test]
     pub fn test_phrase_score() -> crate::Result<()> {
         let index = create_index(&["a b c", "a b c a b"])?;
         let scores = test_query(0, &index, vec!["a", "b"]);
