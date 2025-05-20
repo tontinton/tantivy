@@ -2,7 +2,7 @@ use crate::docset::{DocSet, TERMINATED};
 use crate::fieldnorm::FieldNormReader;
 use crate::postings::Postings;
 use crate::query::bm25::Bm25Weight;
-use crate::query::phrase_query::{intersection_count, PhraseScorer};
+use crate::query::phrase_query::{intersection_count, PhraseScorer, PhraseScorerFlags};
 use crate::query::Scorer;
 use crate::{DocId, Score};
 
@@ -127,7 +127,7 @@ impl<TPostings: Postings> PhrasePrefixScorer<TPostings> {
                 fieldnorm_reader,
                 0,
                 1,
-                false,
+                PhraseScorerFlags::default(),
             ))
         } else {
             let (pos, postings) = term_postings

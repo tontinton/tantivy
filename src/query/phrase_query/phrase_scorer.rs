@@ -43,6 +43,19 @@ impl<TPostings: Postings> DocSet for PostingsWithOffset<TPostings> {
     }
 }
 
+bitflags::bitflags! {
+    pub struct PhraseScorerFlags: u8 {
+        const MUST_START = 0b0000_0001;
+        const MUST_MATCH_FIELD_LENGTH = 0b0000_0010;
+    }
+}
+
+impl Default for PhraseScorerFlags {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 pub struct PhraseScorer<TPostings: Postings> {
     intersection_docset: Intersection<PostingsWithOffset<TPostings>, PostingsWithOffset<TPostings>>,
     num_terms: usize,
@@ -55,7 +68,7 @@ pub struct PhraseScorer<TPostings: Postings> {
     left_slops: Vec<u8>,
     positions_buffer: Vec<u32>,
     slops_buffer: Vec<u8>,
-    match_entire_field: bool,
+    flags: PhraseScorerFlags,
 }
 
 /// Returns true if and only if the two sorted arrays contain a common element
@@ -359,7 +372,7 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
             fieldnorm_reader,
             slop,
             0,
-            false,
+            PhraseScorerFlags::default(),
         )
     }
 
@@ -374,7 +387,7 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
             fieldnorm_reader,
             0,
             0,
-            true,
+            PhraseScorerFlags::MUST_START | PhraseScorerFlags::MUST_MATCH_FIELD_LENGTH,
         )
     }
 
@@ -384,7 +397,7 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
         fieldnorm_reader: FieldNormReader,
         slop: u32,
         offset: usize,
-        match_entire_field: bool,
+        flags: PhraseScorerFlags,
     ) -> PhraseScorer<TPostings> {
         let max_offset = term_postings_with_offset
             .iter()
@@ -411,7 +424,7 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
             left_slops: Vec::with_capacity(100),
             slops_buffer: Vec::with_capacity(100),
             positions_buffer: Vec::with_capacity(100),
-            match_entire_field: match_entire_field,
+            flags: flags,
         };
         if scorer.doc() != TERMINATED && !scorer.phrase_match() {
             scorer.advance();
@@ -479,22 +492,28 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
 
     fn compute_phrase_match(&mut self) {
         {
+            if self
+                .flags
+                .contains(PhraseScorerFlags::MUST_MATCH_FIELD_LENGTH)
+            {
+                // Note that `estimated_field_len = min(actual_field_num_terms 255)`
+                // so will match longer values that starts with the queried phrase
+                let estimated_field_len = self.fieldnorm_reader.fieldnorm(self.doc());
+                if estimated_field_len > self.num_terms as u32 {
+                    return;
+                }
+            }
+
             self.intersection_docset
                 .docset_mut_specialized(0)
                 .positions(&mut self.left_positions);
 
-            // For exact matching, ensure the phrase covers the entire field content
-            if self.match_entire_field {
-                let estimated_field_len = self.fieldnorm_reader.fieldnorm(self.doc());
-
-                // Keep only positions where the first term appears at position 0 (offset by the
-                // number of terms)
+            if self.flags.contains(PhraseScorerFlags::MUST_START) {
+                // Keep only match positions where the first term appears at position 0
+                // (offset by the number of terms)
                 self.left_positions
-                    .retain(|&pos| pos == (self.num_terms as u32) - 1);
-
-                // Note that `estimated_field_len = min(actual_field_num_terms 255)`
-                // so will match longer values that starts with the queried phrase
-                if estimated_field_len > self.num_terms as u32 || self.left_positions.is_empty() {
+                    .retain(|&pos| pos == (self.num_terms) as u32 - 1);
+                if self.left_positions.is_empty() {
                     return;
                 }
             }
