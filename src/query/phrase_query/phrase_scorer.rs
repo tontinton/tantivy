@@ -59,6 +59,7 @@ impl Default for PhraseScorerFlags {
 pub struct PhraseScorer<TPostings: Postings> {
     intersection_docset: Intersection<PostingsWithOffset<TPostings>, PostingsWithOffset<TPostings>>,
     num_terms: usize,
+    offset: usize,
     left_positions: Vec<u32>,
     right_positions: Vec<u32>,
     phrase_count: u32,
@@ -415,6 +416,7 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
         let mut scorer = PhraseScorer {
             intersection_docset: Intersection::new(postings_with_offsets),
             num_terms: num_docsets,
+            offset,
             left_positions: Vec::with_capacity(100),
             right_positions: Vec::with_capacity(100),
             phrase_count: 0u32,
@@ -512,7 +514,7 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
                 // Keep only match positions where the first term appears at position 0
                 // (offset by the number of terms)
                 self.left_positions
-                    .retain(|&pos| pos == (self.num_terms) as u32 - 1);
+                    .retain(|&pos| pos == (self.num_terms + self.offset) as u32 - 1);
                 if self.left_positions.is_empty() {
                     return;
                 }
