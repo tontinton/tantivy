@@ -27,6 +27,7 @@ pub struct PhrasePrefixQuery {
     phrase_terms: Vec<(usize, Term)>,
     prefix: (usize, Term),
     max_expansions: u32,
+    must_start: bool,
 }
 
 impl PhrasePrefixQuery {
@@ -60,12 +61,18 @@ impl PhrasePrefixQuery {
             prefix: terms.pop().unwrap(),
             phrase_terms: terms,
             max_expansions: DEFAULT_MAX_EXPANSIONS,
+            must_start: false,
         }
     }
 
     /// Maximum number of terms to which the last provided term will expand.
     pub fn set_max_expansions(&mut self, value: u32) {
         self.max_expansions = value;
+    }
+
+    /// Whether the beginning of the field must start with phrase prefix query.
+    pub fn set_must_start(&mut self, value: bool) {
+        self.must_start = value;
     }
 
     /// The [`Field`] this `PhrasePrefixQuery` is targeting.
@@ -121,6 +128,7 @@ impl PhrasePrefixQuery {
             self.prefix.clone(),
             bm25_weight_opt,
             self.max_expansions,
+            self.must_start,
         );
         Ok(Some(weight))
     }
@@ -148,12 +156,14 @@ impl Query for PhrasePrefixQuery {
             let lower_bound = Bound::Included(self.prefix.1.clone());
             let upper_bound = end_term;
 
-            Ok(Box::new(InvertedIndexRangeWeight::new(
+            let mut weight = Box::new(InvertedIndexRangeWeight::new(
                 self.field,
                 &lower_bound,
                 &upper_bound,
                 Some(self.max_expansions as u64),
-            )))
+            ));
+            weight.set_must_start(self.must_start);
+            Ok(weight)
         }
     }
 

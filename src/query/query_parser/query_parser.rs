@@ -1830,11 +1830,11 @@ mod test {
             format!("{query:?}"),
             "BooleanQuery { subqueries: [(Should, PhrasePrefixQuery { field: Field(0), \
              phrase_terms: [(0, Term(field=0, type=Str, \"big\")), (1, Term(field=0, type=Str, \
-             \"bad\"))], prefix: (2, Term(field=0, type=Str, \"wo\")), max_expansions: 50 }), \
-             (Should, PhrasePrefixQuery { field: Field(1), phrase_terms: [(0, Term(field=1, \
-             type=Str, \"big\")), (1, Term(field=1, type=Str, \"bad\"))], prefix: (2, \
-             Term(field=1, type=Str, \"wo\")), max_expansions: 50 })], \
-             minimum_number_should_match: 1 }"
+             \"bad\"))], prefix: (2, Term(field=0, type=Str, \"wo\")), max_expansions: 50, \
+             must_start: false }), (Should, PhrasePrefixQuery { field: Field(1), phrase_terms: \
+             [(0, Term(field=1, type=Str, \"big\")), (1, Term(field=1, type=Str, \"bad\"))], \
+             prefix: (2, Term(field=1, type=Str, \"wo\")), max_expansions: 50, must_start: false \
+             })], minimum_number_should_match: 1 }"
         );
     }
 

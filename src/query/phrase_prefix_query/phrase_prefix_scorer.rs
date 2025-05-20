@@ -101,6 +101,8 @@ pub struct PhrasePrefixScorer<TPostings: Postings> {
     suffix_offset: u32,
     phrase_count: u32,
     suffix_position_buffer: Vec<u32>,
+    num_terms: usize,
+    must_start: bool,
 }
 
 impl<TPostings: Postings> PhrasePrefixScorer<TPostings> {
@@ -111,6 +113,7 @@ impl<TPostings: Postings> PhrasePrefixScorer<TPostings> {
         fieldnorm_reader: FieldNormReader,
         suffixes: Vec<TPostings>,
         suffix_pos: usize,
+        must_start: bool,
     ) -> PhrasePrefixScorer<TPostings> {
         // correct indices so we can merge with our suffix term the PhraseScorer doesn't know about
         let max_offset = term_postings
@@ -120,6 +123,7 @@ impl<TPostings: Postings> PhrasePrefixScorer<TPostings> {
             .max()
             .unwrap();
 
+        let num_terms: usize = term_postings.len();
         let phrase_scorer = if term_postings.len() > 1 {
             PhraseKind::MultiPrefix(PhraseScorer::new_with_offset(
                 term_postings,
@@ -127,7 +131,11 @@ impl<TPostings: Postings> PhrasePrefixScorer<TPostings> {
                 fieldnorm_reader,
                 0,
                 1,
-                PhraseScorerFlags::default(),
+                if must_start {
+                    PhraseScorerFlags::MUST_START
+                } else {
+                    PhraseScorerFlags::default()
+                },
             ))
         } else {
             let (pos, postings) = term_postings
@@ -146,6 +154,8 @@ impl<TPostings: Postings> PhrasePrefixScorer<TPostings> {
             suffix_offset: (max_offset - suffix_pos) as u32,
             phrase_count: 0,
             suffix_position_buffer: Vec::with_capacity(100),
+            num_terms,
+            must_start,
         };
         if phrase_prefix_scorer.doc() != TERMINATED && !phrase_prefix_scorer.matches_prefix() {
             phrase_prefix_scorer.advance();
@@ -160,7 +170,18 @@ impl<TPostings: Postings> PhrasePrefixScorer<TPostings> {
     fn matches_prefix(&mut self) -> bool {
         let mut count = 0;
         let current_doc = self.doc();
-        let pos_matching = self.phrase_scorer.get_intersection();
+        let all_pos_matching = self.phrase_scorer.get_intersection();
+
+        let offset_start_match_pos = self.num_terms as u32;
+        let pos_matching = if self.must_start {
+            if !all_pos_matching.contains(&offset_start_match_pos) {
+                return false;
+            }
+            std::slice::from_ref(&offset_start_match_pos)
+        } else {
+            all_pos_matching
+        };
+
         for suffix in &mut self.suffixes {
             if suffix.doc() > current_doc {
                 continue;

@@ -13,6 +13,7 @@ pub struct PhrasePrefixWeight {
     prefix: (usize, Term),
     similarity_weight_opt: Option<Bm25Weight>,
     max_expansions: u32,
+    must_start: bool,
 }
 
 impl PhrasePrefixWeight {
@@ -23,12 +24,14 @@ impl PhrasePrefixWeight {
         prefix: (usize, Term),
         similarity_weight_opt: Option<Bm25Weight>,
         max_expansions: u32,
+        must_start: bool,
     ) -> PhrasePrefixWeight {
         PhrasePrefixWeight {
             phrase_terms,
             prefix,
             similarity_weight_opt,
             max_expansions,
+            must_start,
         }
     }
 
@@ -109,6 +112,7 @@ impl PhrasePrefixWeight {
             fieldnorm_reader,
             suffixes,
             self.prefix.0,
+            self.must_start,
         )))
     }
 }
