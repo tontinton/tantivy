@@ -65,6 +65,7 @@ pub struct SegmentSpaceUsage {
     num_docs: u32,
 
     termdict: PerFieldSpaceUsage,
+    reversed_termdict: PerFieldSpaceUsage,
     postings: PerFieldSpaceUsage,
     positions: PerFieldSpaceUsage,
     fast_fields: PerFieldSpaceUsage,
@@ -82,6 +83,7 @@ impl SegmentSpaceUsage {
     pub(crate) fn new(
         num_docs: u32,
         termdict: PerFieldSpaceUsage,
+        reversed_termdict: PerFieldSpaceUsage,
         postings: PerFieldSpaceUsage,
         positions: PerFieldSpaceUsage,
         fast_fields: PerFieldSpaceUsage,
@@ -90,6 +92,7 @@ impl SegmentSpaceUsage {
         deletes: ByteCount,
     ) -> SegmentSpaceUsage {
         let total = termdict.total()
+            + reversed_termdict.total()
             + postings.total()
             + positions.total()
             + fast_fields.total()
@@ -99,6 +102,7 @@ impl SegmentSpaceUsage {
         SegmentSpaceUsage {
             num_docs,
             termdict,
+            reversed_termdict,
             postings,
             positions,
             fast_fields,
@@ -122,6 +126,7 @@ impl SegmentSpaceUsage {
             FastFields => PerField(self.fast_fields().clone()),
             FieldNorms => PerField(self.fieldnorms().clone()),
             Terms => PerField(self.termdict().clone()),
+            ReversedTerms => PerField(self.reversed_termdict().clone()),
             SegmentComponent::Store => ComponentSpaceUsage::Store(self.store().clone()),
             SegmentComponent::TempStore => ComponentSpaceUsage::Store(self.store().clone()),
             Delete => Basic(self.deletes()),
@@ -136,6 +141,11 @@ impl SegmentSpaceUsage {
     /// Space usage for term dictionary
     pub fn termdict(&self) -> &PerFieldSpaceUsage {
         &self.termdict
+    }
+
+    /// Space usage for reversed term dictionary
+    pub fn reversed_termdict(&self) -> &PerFieldSpaceUsage {
+        &self.reversed_termdict
     }
 
     /// Space usage for postings list
@@ -210,7 +220,7 @@ impl StoreSpaceUsage {
 ///
 /// A field can appear with a single index (typically 0) or with multiple indexes.
 /// Multiple indexes are used to handle variable length things, where
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct PerFieldSpaceUsage {
     fields: HashMap<Field, FieldUsage>,
     total: ByteCount,

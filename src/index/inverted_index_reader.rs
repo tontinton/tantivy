@@ -28,6 +28,7 @@ use crate::termdict::TermDictionary;
 /// [`SegmentReader::inverted_index()`](crate::SegmentReader::inverted_index).
 pub struct InvertedIndexReader {
     termdict: TermDictionary,
+    reversed_termdict_opt: Option<TermDictionary>,
     postings_file_slice: FileSlice,
     positions_file_slice: FileSlice,
     record_option: IndexRecordOption,
@@ -37,6 +38,7 @@ pub struct InvertedIndexReader {
 impl InvertedIndexReader {
     pub(crate) fn new(
         termdict: TermDictionary,
+        reversed_termdict_opt: Option<TermDictionary>,
         postings_file_slice: FileSlice,
         positions_file_slice: FileSlice,
         record_option: IndexRecordOption,
@@ -45,6 +47,7 @@ impl InvertedIndexReader {
         let total_num_tokens = u64::deserialize(&mut total_num_tokens_slice.read_bytes()?)?;
         Ok(InvertedIndexReader {
             termdict,
+            reversed_termdict_opt,
             postings_file_slice: postings_body,
             positions_file_slice,
             record_option,
@@ -57,6 +60,7 @@ impl InvertedIndexReader {
     pub fn empty(record_option: IndexRecordOption) -> InvertedIndexReader {
         InvertedIndexReader {
             termdict: TermDictionary::empty(),
+            reversed_termdict_opt: None,
             postings_file_slice: FileSlice::empty(),
             positions_file_slice: FileSlice::empty(),
             record_option,
@@ -72,6 +76,11 @@ impl InvertedIndexReader {
     /// Return the term dictionary datastructure.
     pub fn terms(&self) -> &TermDictionary {
         &self.termdict
+    }
+
+    /// Return the reversed term dictionary datastructure.
+    pub fn revterms(&self) -> Option<&TermDictionary> {
+        self.reversed_termdict_opt.as_ref()
     }
 
     /// Return the fields and types encoded in the dictionary in lexicographic order.

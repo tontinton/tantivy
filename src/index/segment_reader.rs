@@ -39,6 +39,7 @@ pub struct SegmentReader {
     num_docs: DocId,
 
     termdict_composite: CompositeFile,
+    reversed_termdict_composite_opt: Option<CompositeFile>,
     postings_composite: CompositeFile,
     positions_composite: CompositeFile,
     fast_fields_readers: FastFieldReaders,
@@ -152,6 +153,12 @@ impl SegmentReader {
         let termdict_file = segment.open_read(SegmentComponent::Terms)?;
         let termdict_composite = CompositeFile::open(&termdict_file)?;
 
+        let reversed_termdict_composite_opt = segment
+            .open_read(SegmentComponent::ReversedTerms)
+            .ok()
+            .map(|reversed_termdict_file| CompositeFile::open(&reversed_termdict_file))
+            .transpose()?;
+
         let store_file = segment.open_read(SegmentComponent::Store)?;
 
         crate::fail_point!("SegmentReader::open#middle");
@@ -195,6 +202,7 @@ impl SegmentReader {
             num_docs,
             max_doc,
             termdict_composite,
+            reversed_termdict_composite_opt,
             postings_composite,
             fast_fields_readers,
             fieldnorm_readers,
@@ -268,8 +276,16 @@ impl SegmentReader {
             DataCorruption::comment_only(error_msg)
         })?;
 
+        let reversed_term_dict = self
+            .reversed_termdict_composite_opt
+            .as_ref()
+            .and_then(|termdict| termdict.open_read(field))
+            .map(TermDictionary::open)
+            .transpose()?;
+
         let inv_idx_reader = Arc::new(InvertedIndexReader::new(
             TermDictionary::open(termdict_file)?,
+            reversed_term_dict,
             postings_file,
             positions_file,
             record_option,
@@ -419,6 +435,10 @@ impl SegmentReader {
         Ok(SegmentSpaceUsage::new(
             self.num_docs(),
             self.termdict_composite.space_usage(),
+            self.reversed_termdict_composite_opt
+                .as_ref()
+                .map(CompositeFile::space_usage)
+                .unwrap_or_default(),
             self.postings_composite.space_usage(),
             self.positions_composite.space_usage(),
             self.fast_fields_readers.space_usage(self.schema())?,

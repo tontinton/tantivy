@@ -137,6 +137,7 @@ impl SegmentMeta {
             SegmentComponent::Postings => ".idx".to_string(),
             SegmentComponent::Positions => ".pos".to_string(),
             SegmentComponent::Terms => ".term".to_string(),
+            SegmentComponent::ReversedTerms => ".revterm".to_string(),
             SegmentComponent::Store => ".store".to_string(),
             SegmentComponent::TempStore => ".store.temp".to_string(),
             SegmentComponent::FastFields => ".fast".to_string(),

@@ -48,6 +48,7 @@ use crate::{DocId, Score};
 /// [available here](https://fulmicoton.gitbooks.io/tantivy-doc/content/inverted-index.html).
 pub struct InvertedIndexSerializer {
     terms_write: CompositeWrite<WritePtr>,
+    reversed_terms_write: CompositeWrite<WritePtr>,
     postings_write: CompositeWrite<WritePtr>,
     positions_write: CompositeWrite<WritePtr>,
     schema: Schema,
@@ -56,9 +57,10 @@ pub struct InvertedIndexSerializer {
 impl InvertedIndexSerializer {
     /// Open a new `InvertedIndexSerializer` for the given segment
     pub fn open(segment: &mut Segment) -> crate::Result<InvertedIndexSerializer> {
-        use crate::index::SegmentComponent::{Positions, Postings, Terms};
+        use crate::index::SegmentComponent::{Positions, Postings, ReversedTerms, Terms};
         let inv_index_serializer = InvertedIndexSerializer {
             terms_write: CompositeWrite::wrap(segment.open_write(Terms)?),
+            reversed_terms_write: CompositeWrite::wrap(segment.open_write(ReversedTerms)?),
             postings_write: CompositeWrite::wrap(segment.open_write(Postings)?),
             positions_write: CompositeWrite::wrap(segment.open_write(Positions)?),
             schema: segment.schema(),
@@ -78,6 +80,7 @@ impl InvertedIndexSerializer {
     ) -> io::Result<FieldSerializer> {
         let field_entry: &FieldEntry = self.schema.get_field_entry(field);
         let term_dictionary_write = self.terms_write.for_field(field);
+        let reversed_term_dictionary_write = self.reversed_terms_write.for_field(field);
         let postings_write = self.postings_write.for_field(field);
         let positions_write = self.positions_write.for_field(field);
         let field_type: FieldType = (*field_entry.field_type()).clone();
@@ -85,6 +88,7 @@ impl InvertedIndexSerializer {
             &field_type,
             total_num_tokens,
             term_dictionary_write,
+            reversed_term_dictionary_write,
             postings_write,
             positions_write,
             fieldnorm_reader,
@@ -94,6 +98,7 @@ impl InvertedIndexSerializer {
     /// Closes the serializer.
     pub fn close(self) -> io::Result<()> {
         self.terms_write.close()?;
+        self.reversed_terms_write.close()?;
         self.postings_write.close()?;
         self.positions_write.close()?;
         Ok(())
@@ -104,6 +109,7 @@ impl InvertedIndexSerializer {
 /// the serialization of a specific field.
 pub struct FieldSerializer<'a> {
     term_dictionary_builder: TermDictionaryBuilder<&'a mut CountingWriter<WritePtr>>,
+    reversed_term_dictionary_builder: TermDictionaryBuilder<&'a mut CountingWriter<WritePtr>>,
     postings_serializer: PostingsSerializer<&'a mut CountingWriter<WritePtr>>,
     positions_serializer_opt: Option<PositionSerializer<&'a mut CountingWriter<WritePtr>>>,
     current_term_info: TermInfo,
@@ -115,6 +121,7 @@ impl<'a> FieldSerializer<'a> {
         field_type: &FieldType,
         total_num_tokens: u64,
         term_dictionary_write: &'a mut CountingWriter<WritePtr>,
+        reversed_term_dictionary_write: &'a mut CountingWriter<WritePtr>,
         postings_write: &'a mut CountingWriter<WritePtr>,
         positions_write: &'a mut CountingWriter<WritePtr>,
         fieldnorm_reader: Option<FieldNormReader>,
@@ -124,6 +131,8 @@ impl<'a> FieldSerializer<'a> {
             .index_record_option()
             .unwrap_or(IndexRecordOption::Basic);
         let term_dictionary_builder = TermDictionaryBuilder::create(term_dictionary_write)?;
+        let reversed_term_dictionary_builder =
+            TermDictionaryBuilder::create_reverse(reversed_term_dictionary_write)?;
         let average_fieldnorm = fieldnorm_reader
             .as_ref()
             .map(|ff_reader| (total_num_tokens as Score / ff_reader.num_docs() as Score))
@@ -142,6 +151,7 @@ impl<'a> FieldSerializer<'a> {
 
         Ok(FieldSerializer {
             term_dictionary_builder,
+            reversed_term_dictionary_builder,
             postings_serializer,
             positions_serializer_opt,
             current_term_info: TermInfo::default(),
@@ -164,6 +174,10 @@ impl<'a> FieldSerializer<'a> {
         }
     }
 
+    pub(crate) fn last_term_info(&self) -> &TermInfo {
+        &self.current_term_info
+    }
+
     /// Starts the postings for a new term.
     /// * term - the term. It needs to come after the previous term according to the lexicographical
     ///   order.
@@ -184,6 +198,13 @@ impl<'a> FieldSerializer<'a> {
         self.term_dictionary_builder.insert_key(term)?;
         self.postings_serializer
             .new_term(term_doc_freq, record_term_freq);
+        Ok(())
+    }
+
+    /// Serialize a reversed term by providing the term info of the non reversed term which was
+    /// already serialized.
+    pub fn insert_reversed_term(&mut self, term: &[u8], info: &TermInfo) -> io::Result<()> {
+        self.reversed_term_dictionary_builder.insert(term, info)?;
         Ok(())
     }
 
@@ -239,6 +260,7 @@ impl<'a> FieldSerializer<'a> {
         }
         self.postings_serializer.close()?;
         self.term_dictionary_builder.finish()?;
+        self.reversed_term_dictionary_builder.finish()?;
         Ok(())
     }
 }

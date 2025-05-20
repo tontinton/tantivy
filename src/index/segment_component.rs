@@ -19,6 +19,10 @@ pub enum SegmentComponent {
     /// Dictionary associating `Term`s to `TermInfo`s which is
     /// simply an address into the `postings` file and the `positions` file.
     Terms,
+    /// Same as `Terms`, but with the terms reversed, pointing to the same address in the
+    /// `postings` file and the `positions` file, allowing for fast suffix searches without
+    /// sacrificing too much space.
+    ReversedTerms,
     /// Row-oriented, compressed storage of the documents.
     /// Accessing a document from the store is relatively slow, as it
     /// requires to decompress the entire block it belongs to.
@@ -33,12 +37,13 @@ pub enum SegmentComponent {
 impl SegmentComponent {
     /// Iterates through the components.
     pub fn iterator() -> slice::Iter<'static, SegmentComponent> {
-        static SEGMENT_COMPONENTS: [SegmentComponent; 8] = [
+        static SEGMENT_COMPONENTS: [SegmentComponent; 9] = [
             SegmentComponent::Postings,
             SegmentComponent::Positions,
             SegmentComponent::FastFields,
             SegmentComponent::FieldNorms,
             SegmentComponent::Terms,
+            SegmentComponent::ReversedTerms,
             SegmentComponent::Store,
             SegmentComponent::TempStore,
             SegmentComponent::Delete,
