@@ -6,12 +6,13 @@ use common::BitSet;
 
 use super::range_query_fastfield::FastFieldRangeWeight;
 use crate::index::SegmentReader;
+use crate::postings::TermInfo;
 use crate::query::explanation::does_not_match;
 use crate::query::range_query::is_type_valid_for_fastfield_range_query;
 use crate::query::{BitSetDocSet, ConstScorer, EnableScoring, Explanation, Query, Scorer, Weight};
 use crate::schema::{Field, IndexRecordOption, Term, Type};
 use crate::termdict::{TermDictionary, TermStreamer};
-use crate::{DocId, Score};
+use crate::{DocId, DocSet, InvertedIndexReader, Score, TERMINATED};
 
 /// `RangeQuery` matches all documents that have at least one term within a defined range.
 ///
@@ -169,6 +170,7 @@ pub struct InvertedIndexRangeWeight {
     lower_bound: Bound<Vec<u8>>,
     upper_bound: Bound<Vec<u8>>,
     limit: Option<u64>,
+    must_start: bool,
 }
 
 impl InvertedIndexRangeWeight {
@@ -187,7 +189,13 @@ impl InvertedIndexRangeWeight {
             lower_bound: map_bound(lower_bound, verify_and_unwrap_term),
             upper_bound: map_bound(upper_bound, verify_and_unwrap_term),
             limit,
+            must_start: false,
         }
+    }
+
+    /// Whether the beginning of the field must start with the term
+    pub fn set_must_start(&mut self, must_start: bool) {
+        self.must_start = must_start;
     }
 
     fn term_range<'a>(&self, term_dict: &'a TermDictionary) -> io::Result<TermStreamer<'a>> {
@@ -209,6 +217,53 @@ impl InvertedIndexRangeWeight {
         }
         term_stream_builder.into_stream()
     }
+
+    /// Collects documents where the term appears at position 0
+    fn collect_docs_starting_with_term_info(
+        &self,
+        inverted_index: &InvertedIndexReader,
+        term_info: &TermInfo,
+        doc_bitset: &mut BitSet,
+    ) -> crate::Result<()> {
+        let mut postings = inverted_index
+            .read_postings_from_terminfo(term_info, IndexRecordOption::WithFreqsAndPositions)?;
+
+        let mut doc = postings.doc();
+        while doc != TERMINATED {
+            if postings.has_position_zero() {
+                doc_bitset.insert(doc);
+            }
+            doc = postings.advance();
+        }
+
+        Ok(())
+    }
+
+    /// Collects all documents with term
+    fn collect_all_docs_for_term_info(
+        &self,
+        inverted_index: &InvertedIndexReader,
+        term_info: &TermInfo,
+        doc_bitset: &mut BitSet,
+    ) -> crate::Result<()> {
+        let mut block_segment_postings = inverted_index
+            .read_block_postings_from_terminfo(term_info, IndexRecordOption::Basic)?;
+
+        loop {
+            let docs = block_segment_postings.docs();
+            if docs.is_empty() {
+                break;
+            }
+
+            for &doc in docs {
+                doc_bitset.insert(doc);
+            }
+
+            block_segment_postings.advance();
+        }
+
+        Ok(())
+    }
 }
 
 impl Weight for InvertedIndexRangeWeight {
@@ -220,6 +275,7 @@ impl Weight for InvertedIndexRangeWeight {
         let term_dict = inverted_index.terms();
         let mut term_range = self.term_range(term_dict)?;
         let mut processed_count = 0;
+
         while term_range.advance() {
             if let Some(limit) = self.limit {
                 if limit <= processed_count {
@@ -228,19 +284,18 @@ impl Weight for InvertedIndexRangeWeight {
             }
             processed_count += 1;
             let term_info = term_range.value();
-            let mut block_segment_postings = inverted_index
-                .read_block_postings_from_terminfo(term_info, IndexRecordOption::Basic)?;
-            loop {
-                let docs = block_segment_postings.docs();
-                if docs.is_empty() {
-                    break;
-                }
-                for &doc in block_segment_postings.docs() {
-                    doc_bitset.insert(doc);
-                }
-                block_segment_postings.advance();
+
+            if self.must_start {
+                self.collect_docs_starting_with_term_info(
+                    &inverted_index,
+                    term_info,
+                    &mut doc_bitset,
+                )?;
+            } else {
+                self.collect_all_docs_for_term_info(&inverted_index, term_info, &mut doc_bitset)?;
             }
         }
+
         let doc_bitset = BitSetDocSet::from(doc_bitset);
         Ok(Box::new(ConstScorer::new(doc_bitset, boost)))
     }
