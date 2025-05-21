@@ -152,6 +152,33 @@ impl SegmentPostings {
             position_reader,
         }
     }
+
+    /// Checks if the term appears at position 0 in the current document
+    ///
+    /// This is more efficient than reading all positions when you only
+    /// need to check for position 0.
+    pub fn has_position_zero(&mut self) -> bool {
+        if self.term_freq() == 0 {
+            return false;
+        }
+
+        if let Some(position_reader) = self.position_reader.as_mut() {
+            debug_assert!(
+                !self.block_cursor.freqs().is_empty(),
+                "No positions available"
+            );
+            let read_offset = self.block_cursor.position_offset()
+                + (self.block_cursor.freqs()[..self.cur]
+                    .iter()
+                    .cloned()
+                    .sum::<u32>() as u64);
+
+            let mut first_position = [0u32; 1];
+            position_reader.read(read_offset, &mut first_position);
+            return first_position[0] == 0;
+        }
+        false
+    }
 }
 
 impl DocSet for SegmentPostings {
