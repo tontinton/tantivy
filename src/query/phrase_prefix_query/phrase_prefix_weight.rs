@@ -267,4 +267,97 @@ mod tests {
         assert_eq!(phrase_scorer.advance(), TERMINATED);
         Ok(())
     }
+
+    #[test]
+    pub fn test_must_start() -> crate::Result<()> {
+        let index = create_index(&[
+            "aa bb cc",          // Doc 0: No match with must_start
+            "aa bb cc dd",       // Doc 1: No match with must_start
+            "bb c dd ee ff",     // Doc 2: Match with must_start
+            "bb cc dd",          // Doc 3: Match with must_start
+            "bb cc dd ee ff gg", // Doc 4: Match with must_start
+        ])?;
+        let schema = index.schema();
+        let text_field = schema.get_field("text").unwrap();
+        let searcher = index.reader()?.searcher();
+        let enable_scoring = EnableScoring::enabled_from_searcher(&searcher);
+
+        // Test short query (single partial term)
+        let mut short_query = PhrasePrefixQuery::new(vec![Term::from_field_text(text_field, "b")]);
+        // Without must_start - should match all docs (all contain "b")
+        let mut scorer = short_query
+            .weight(enable_scoring.clone())
+            .unwrap()
+            .scorer(searcher.segment_reader(0u32), 1.0)?;
+        assert_eq!(scorer.doc(), 0);
+        assert_eq!(scorer.advance(), 1);
+        assert_eq!(scorer.advance(), 2);
+        assert_eq!(scorer.advance(), 3);
+        assert_eq!(scorer.advance(), 4);
+        assert_eq!(scorer.advance(), TERMINATED);
+        // With must_start - should match only docs starting with "b"
+        short_query.set_must_start(true);
+        let mut scorer = short_query
+            .weight(enable_scoring.clone())
+            .unwrap()
+            .scorer(searcher.segment_reader(0u32), 1.0)?;
+        assert_eq!(scorer.doc(), 2);
+        assert_eq!(scorer.advance(), 3);
+        assert_eq!(scorer.advance(), 4);
+        assert_eq!(scorer.advance(), TERMINATED);
+
+        // Test mid query (single term + single partial term)
+        let mut mid_query = PhrasePrefixQuery::new(vec![
+            Term::from_field_text(text_field, "bb"),
+            Term::from_field_text(text_field, "c"),
+        ]);
+        // Without must_start - should match all docs (all contains "bb")
+        let mut scorer = mid_query
+            .weight(enable_scoring.clone())
+            .unwrap()
+            .scorer(searcher.segment_reader(0u32), 1.0)?;
+        assert_eq!(scorer.doc(), 0);
+        assert_eq!(scorer.advance(), 1);
+        assert_eq!(scorer.advance(), 2);
+        assert_eq!(scorer.advance(), 3);
+        assert_eq!(scorer.advance(), 4);
+        assert_eq!(scorer.advance(), TERMINATED);
+        // With must_start - should only match docs starting with "bb c"
+        mid_query.set_must_start(true);
+        scorer = mid_query
+            .weight(enable_scoring.clone())
+            .unwrap()
+            .scorer(searcher.segment_reader(0u32), 1.0)?;
+        assert_eq!(scorer.doc(), 2);
+        assert_eq!(scorer.advance(), 3);
+        assert_eq!(scorer.advance(), 4);
+        assert_eq!(scorer.advance(), TERMINATED);
+
+        // Test long query (more than 2 terms + partial term)
+        let mut long_query = PhrasePrefixQuery::new(vec![
+            Term::from_field_text(text_field, "bb"),
+            Term::from_field_text(text_field, "cc"),
+            Term::from_field_text(text_field, "d"),
+        ]);
+        // Without must_start - should match all docs containing "bb cc d"
+        let mut scorer = long_query
+            .weight(enable_scoring.clone())
+            .unwrap()
+            .scorer(searcher.segment_reader(0u32), 1.0)?;
+        assert_eq!(scorer.doc(), 1);
+        assert_eq!(scorer.advance(), 3);
+        assert_eq!(scorer.advance(), 4);
+        assert_eq!(scorer.advance(), TERMINATED);
+        // With must_start - should only match docs starting with "bb cc d"
+        long_query.set_must_start(true);
+        let mut scorer = long_query
+            .weight(enable_scoring)
+            .unwrap()
+            .scorer(searcher.segment_reader(0u32), 1.0)?;
+        assert_eq!(scorer.doc(), 3);
+        assert_eq!(scorer.advance(), 4);
+        assert_eq!(scorer.advance(), TERMINATED);
+
+        Ok(())
+    }
 }
