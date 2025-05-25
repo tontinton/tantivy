@@ -1,7 +1,7 @@
 use common::BitSet;
 use tantivy_fst::Regex;
 
-use super::PhraseScorer;
+use super::{PhraseScorer, PhraseScorerFlags};
 use crate::fieldnorm::FieldNormReader;
 use crate::index::SegmentReader;
 use crate::postings::{LoadedPostings, Postings, SegmentPostings, TermInfo};
@@ -128,6 +128,7 @@ impl RegexPhraseWeight {
             similarity_weight_opt,
             fieldnorm_reader,
             self.slop,
+            PhraseScorerFlags::default(),
         )))
     }
 

@@ -366,6 +366,7 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
         similarity_weight_opt: Option<Bm25Weight>,
         fieldnorm_reader: FieldNormReader,
         slop: u32,
+        flags: PhraseScorerFlags,
     ) -> PhraseScorer<TPostings> {
         Self::new_with_offset(
             term_postings,
@@ -373,7 +374,7 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
             fieldnorm_reader,
             slop,
             0,
-            PhraseScorerFlags::default(),
+            flags,
         )
     }
 

@@ -1,4 +1,4 @@
-use super::PhraseScorer;
+use super::{PhraseScorer, PhraseScorerFlags};
 use crate::fieldnorm::FieldNormReader;
 use crate::index::SegmentReader;
 use crate::postings::SegmentPostings;
@@ -77,6 +77,7 @@ impl PhraseWeight {
                 similarity_weight_opt,
                 fieldnorm_reader,
                 self.slop,
+                PhraseScorerFlags::default(),
             )))
         }
     }
