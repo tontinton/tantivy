@@ -22,6 +22,7 @@ pub struct RegexPhraseWeight {
     similarity_weight_opt: Option<Bm25Weight>,
     slop: u32,
     max_expansions: u32,
+    must_start: bool,
 }
 
 impl RegexPhraseWeight {
@@ -33,6 +34,7 @@ impl RegexPhraseWeight {
         similarity_weight_opt: Option<Bm25Weight>,
         max_expansions: u32,
         slop: u32,
+        must_start: bool,
     ) -> RegexPhraseWeight {
         RegexPhraseWeight {
             field,
@@ -40,6 +42,7 @@ impl RegexPhraseWeight {
             similarity_weight_opt,
             slop,
             max_expansions,
+            must_start,
         }
     }
 
@@ -128,7 +131,11 @@ impl RegexPhraseWeight {
             similarity_weight_opt,
             fieldnorm_reader,
             self.slop,
-            PhraseScorerFlags::default(),
+            if self.must_start {
+                PhraseScorerFlags::MUST_START
+            } else {
+                PhraseScorerFlags::default()
+            },
         )))
     }
 
