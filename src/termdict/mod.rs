@@ -195,6 +195,18 @@ impl<W: io::Write> TermDictionaryBuilder<W> {
         InnerTermDictBuilder::create(w).map(TermDictionaryBuilder)
     }
 
+    #[cfg(feature = "quickwit")]
+    /// Creates a new reversed `TermDictionaryBuilder`
+    pub fn create_reverse(w: W) -> io::Result<Self> {
+        InnerTermDictBuilder::create_reverse(w).map(TermDictionaryBuilder)
+    }
+
+    #[cfg(not(feature = "quickwit"))]
+    /// Creates a new reversed `TermDictionaryBuilder`
+    pub fn create_reverse(w: W) -> io::Result<Self> {
+        Self::create(w)
+    }
+
     /// Inserts a `(key, value)` pair in the term dictionary.
     ///
     /// *Keys have to be inserted in order.*

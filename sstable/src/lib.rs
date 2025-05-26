@@ -192,15 +192,24 @@ where
         Ok(Self::new(wrt))
     }
 
-    /// Creates a new `TermDictionaryBuilder`.
-    pub fn new(wrt: W) -> Self {
+    /// Creates a new reverse `TermDictionaryBuilder`.
+    pub fn create_reverse(wrt: W) -> io::Result<Self> {
+        Ok(Self::_new(DeltaWriter::new_random_order(wrt)))
+    }
+
+    fn _new(delta_writer: DeltaWriter<W, TValueWriter>) -> Self {
         Writer {
             previous_key: Vec::with_capacity(DEFAULT_KEY_CAPACITY),
             num_terms: 0u64,
             index_builder: SSTableIndexBuilder::default(),
-            delta_writer: DeltaWriter::new(wrt),
+            delta_writer,
             first_ordinal_of_the_block: 0u64,
         }
+    }
+
+    /// Creates a new `TermDictionaryBuilder`.
+    pub fn new(wrt: W) -> Self {
+        Self::_new(DeltaWriter::new(wrt))
     }
 
     /// Set the target block length.

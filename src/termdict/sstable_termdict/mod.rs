@@ -12,6 +12,10 @@ use tantivy_fst::automaton::AlwaysMatch;
 pub use self::merger::TermMerger;
 use crate::postings::TermInfo;
 
+/// Encoding this as part of the length for backwards compatibility.
+/// Old sstables have this bit set to 0, as there cannot be more than u32::MAX term infos).
+const IS_RANDOM_ORDER_BIT: u64 = 1 << 31;
+
 /// The term dictionary contains all of the terms in
 /// `tantivy index` in a sorted manner.
 ///
@@ -56,6 +60,30 @@ impl ValueReader for TermInfoValueReader {
         let len_before = data.len();
         self.term_infos.clear();
         let num_els = VInt::deserialize_u64(&mut data)?;
+
+        let is_random_order = (num_els & IS_RANDOM_ORDER_BIT) != 0;
+        let num_els = num_els & !IS_RANDOM_ORDER_BIT;
+
+        if is_random_order {
+            for _ in 0..num_els {
+                let doc_freq = VInt::deserialize_u64(&mut data)? as u32;
+                let postings_start = VInt::deserialize_u64(&mut data)? as usize;
+                let postings_num_bytes = VInt::deserialize_u64(&mut data)? as usize;
+                let positions_start = VInt::deserialize_u64(&mut data)? as usize;
+                let positions_num_bytes = VInt::deserialize_u64(&mut data)? as usize;
+                let postings_end = postings_start + postings_num_bytes as usize;
+                let positions_end = positions_start + positions_num_bytes as usize;
+                let term_info = TermInfo {
+                    doc_freq,
+                    postings_range: postings_start..postings_end,
+                    positions_range: positions_start..positions_end,
+                };
+                self.term_infos.push(term_info);
+            }
+            let consumed_len = len_before - data.len();
+            return Ok(consumed_len);
+        }
+
         let mut postings_start = VInt::deserialize_u64(&mut data)? as usize;
         let mut positions_start = VInt::deserialize_u64(&mut data)? as usize;
         for _ in 0..num_els {
@@ -81,20 +109,47 @@ impl ValueReader for TermInfoValueReader {
 #[derive(Default)]
 pub struct TermInfoValueWriter {
     term_infos: Vec<TermInfo>,
+    encode_random_order: bool,
 }
 
 impl ValueWriter for TermInfoValueWriter {
     type Value = TermInfo;
+
+    fn new(encode_random_order: bool) -> Self {
+        Self {
+            encode_random_order,
+            ..Default::default()
+        }
+    }
 
     fn write(&mut self, term_info: &TermInfo) {
         self.term_infos.push(term_info.clone());
     }
 
     fn serialize_block(&self, buffer: &mut Vec<u8>) {
-        VInt(self.term_infos.len() as u64).serialize_into_vec(buffer);
+        assert!(self.term_infos.len() < u32::MAX as usize);
+
+        let mut len = self.term_infos.len() as u64;
+        if self.encode_random_order {
+            len |= IS_RANDOM_ORDER_BIT;
+        }
+
+        VInt(len).serialize_into_vec(buffer);
         if self.term_infos.is_empty() {
             return;
         }
+
+        if self.encode_random_order {
+            for term_info in &self.term_infos {
+                VInt(term_info.doc_freq as u64).serialize_into_vec(buffer);
+                VInt(term_info.postings_range.start as u64).serialize_into_vec(buffer);
+                VInt(term_info.postings_range.len() as u64).serialize_into_vec(buffer);
+                VInt(term_info.positions_range.start as u64).serialize_into_vec(buffer);
+                VInt(term_info.positions_range.len() as u64).serialize_into_vec(buffer);
+            }
+            return;
+        }
+
         VInt(self.term_infos[0].postings_range.start as u64).serialize_into_vec(buffer);
         VInt(self.term_infos[0].positions_range.start as u64).serialize_into_vec(buffer);
         for term_info in &self.term_infos {

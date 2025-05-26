@@ -27,6 +27,13 @@ pub trait ValueWriter: Default {
     /// Type of the value being written.
     type Value;
 
+    /// Values are written sequentially ordered, if the value writer uses this information to more
+    /// compactly encode the values, but you need to store non sequential values, call this
+    /// function with _encode_random_order=true.
+    fn new(_encode_random_order: bool) -> Self {
+        Self::default()
+    }
+
     /// Records a new value.
     /// This method usually just accumulates data in a `Vec`,
     /// only to be serialized on the call to `ValueWriter::serialize_block`.

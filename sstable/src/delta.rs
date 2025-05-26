@@ -27,14 +27,22 @@ where
     W: io::Write,
     TValueWriter: ValueWriter,
 {
-    pub fn new(wrt: W) -> Self {
+    fn _new(wrt: W, encode_random_order: bool) -> Self {
         DeltaWriter {
             block: Vec::with_capacity(BLOCK_LEN * 2),
             write: CountingWriter::wrap(BufWriter::new(wrt)),
-            value_writer: TValueWriter::default(),
+            value_writer: TValueWriter::new(encode_random_order),
             stateless_buffer: Vec::new(),
             block_len: BLOCK_LEN,
         }
+    }
+
+    pub fn new(wrt: W) -> Self {
+        Self::_new(wrt, false)
+    }
+
+    pub fn new_random_order(wrt: W) -> Self {
+        Self::_new(wrt, true)
     }
 
     pub fn set_block_len(&mut self, block_len: usize) {
