@@ -6,13 +6,13 @@ use common::BitSet;
 
 use super::range_query_fastfield::FastFieldRangeWeight;
 use crate::index::SegmentReader;
-use crate::postings::TermInfo;
+use crate::postings::utils::collect_docs_for_term_info;
 use crate::query::explanation::does_not_match;
 use crate::query::range_query::is_type_valid_for_fastfield_range_query;
 use crate::query::{BitSetDocSet, ConstScorer, EnableScoring, Explanation, Query, Scorer, Weight};
-use crate::schema::{Field, IndexRecordOption, Term, Type};
+use crate::schema::{Field, Term, Type};
 use crate::termdict::{TermDictionary, TermStreamer};
-use crate::{DocId, DocSet, InvertedIndexReader, Score, TERMINATED};
+use crate::{DocId, DocSet, Score};
 
 /// `RangeQuery` matches all documents that have at least one term within a defined range.
 ///
@@ -217,53 +217,6 @@ impl InvertedIndexRangeWeight {
         }
         term_stream_builder.into_stream()
     }
-
-    /// Collects documents where the term appears at position 0
-    fn collect_docs_starting_with_term_info(
-        &self,
-        inverted_index: &InvertedIndexReader,
-        term_info: &TermInfo,
-        doc_bitset: &mut BitSet,
-    ) -> crate::Result<()> {
-        let mut postings = inverted_index
-            .read_postings_from_terminfo(term_info, IndexRecordOption::WithFreqsAndPositions)?;
-
-        let mut doc = postings.doc();
-        while doc != TERMINATED {
-            if postings.has_position_zero() {
-                doc_bitset.insert(doc);
-            }
-            doc = postings.advance();
-        }
-
-        Ok(())
-    }
-
-    /// Collects all documents with term
-    fn collect_all_docs_for_term_info(
-        &self,
-        inverted_index: &InvertedIndexReader,
-        term_info: &TermInfo,
-        doc_bitset: &mut BitSet,
-    ) -> crate::Result<()> {
-        let mut block_segment_postings = inverted_index
-            .read_block_postings_from_terminfo(term_info, IndexRecordOption::Basic)?;
-
-        loop {
-            let docs = block_segment_postings.docs();
-            if docs.is_empty() {
-                break;
-            }
-
-            for &doc in docs {
-                doc_bitset.insert(doc);
-            }
-
-            block_segment_postings.advance();
-        }
-
-        Ok(())
-    }
 }
 
 impl Weight for InvertedIndexRangeWeight {
@@ -285,15 +238,12 @@ impl Weight for InvertedIndexRangeWeight {
             processed_count += 1;
             let term_info = term_range.value();
 
-            if self.must_start {
-                self.collect_docs_starting_with_term_info(
-                    &inverted_index,
-                    term_info,
-                    &mut doc_bitset,
-                )?;
-            } else {
-                self.collect_all_docs_for_term_info(&inverted_index, term_info, &mut doc_bitset)?;
-            }
+            collect_docs_for_term_info(
+                &inverted_index,
+                term_info,
+                &mut doc_bitset,
+                self.must_start,
+            )?;
         }
 
         let doc_bitset = BitSetDocSet::from(doc_bitset);

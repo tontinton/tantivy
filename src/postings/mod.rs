@@ -17,6 +17,7 @@ mod segment_postings;
 mod serializer;
 mod skip;
 mod term_info;
+pub(crate) mod utils;
 
 pub(crate) use loaded_postings::LoadedPostings;
 pub(crate) use stacker::compute_table_memory_size;
