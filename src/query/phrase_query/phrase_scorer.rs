@@ -427,7 +427,7 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
             left_slops: Vec::with_capacity(100),
             slops_buffer: Vec::with_capacity(100),
             positions_buffer: Vec::with_capacity(100),
-            flags: flags,
+            flags,
         };
         if scorer.doc() != TERMINATED && !scorer.phrase_match() {
             scorer.advance();
