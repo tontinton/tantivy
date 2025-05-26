@@ -6,9 +6,10 @@ use tantivy_fst::Automaton;
 
 use super::phrase_prefix_query::prefix_end;
 use crate::index::SegmentReader;
+use crate::postings::utils::collect_docs_for_term_info;
 use crate::postings::TermInfo;
 use crate::query::{BitSetDocSet, ConstScorer, Explanation, Scorer, Weight};
-use crate::schema::{Field, IndexRecordOption};
+use crate::schema::Field;
 use crate::termdict::{TermDictionary, TermStreamer};
 use crate::{DocId, Score, TantivyError};
 
@@ -20,6 +21,7 @@ pub struct AutomatonWeight<A> {
     // We apply additional filtering based on the given JSON path, when searching within the term
     // dictionary. This prevents terms from unrelated paths from matching the search criteria.
     json_path_bytes: Option<Box<[u8]>>,
+    must_start: bool,
 }
 
 impl<A> AutomatonWeight<A>
@@ -33,6 +35,7 @@ where
             field,
             automaton: automaton.into(),
             json_path_bytes: None,
+            must_start: false,
         }
     }
 
@@ -46,7 +49,13 @@ where
             field,
             automaton: automaton.into(),
             json_path_bytes: Some(json_path_bytes.to_vec().into_boxed_slice()),
+            must_start: false,
         }
+    }
+
+    /// Whether the beginning of the field must start with the term
+    pub fn set_must_start(&mut self, must_start: bool) {
+        self.must_start = must_start;
     }
 
     fn automaton_stream<'a>(
@@ -92,18 +101,13 @@ where
         let mut term_stream = self.automaton_stream(term_dict)?;
         while term_stream.advance() {
             let term_info = term_stream.value();
-            let mut block_segment_postings = inverted_index
-                .read_block_postings_from_terminfo(term_info, IndexRecordOption::Basic)?;
-            loop {
-                let docs = block_segment_postings.docs();
-                if docs.is_empty() {
-                    break;
-                }
-                for &doc in docs {
-                    doc_bitset.insert(doc);
-                }
-                block_segment_postings.advance();
-            }
+
+            collect_docs_for_term_info(
+                &inverted_index,
+                term_info,
+                &mut doc_bitset,
+                self.must_start,
+            )?;
         }
         let doc_bitset = BitSetDocSet::from(doc_bitset);
         let const_scorer = ConstScorer::new(doc_bitset, boost);
