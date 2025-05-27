@@ -83,6 +83,16 @@ impl InvertedIndexReader {
         self.reversed_termdict_opt.as_ref()
     }
 
+    /// Return the reverse term dictionary datastructure if it exists.
+    pub fn terms_ext(&self, reverse: bool) -> io::Result<&TermDictionary> {
+        if reverse {
+            self.revterms()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "revterm file doesn't exist"))
+        } else {
+            Ok(self.terms())
+        }
+    }
+
     /// Return the fields and types encoded in the dictionary in lexicographic order.
     /// Only valid on JSON fields.
     ///
@@ -238,12 +248,13 @@ impl InvertedIndexReader {
         automaton: A,
         limit: Option<u64>,
         merge_holes_under_bytes: usize,
+        reverse: bool,
     ) -> io::Result<impl Iterator<Item = TermInfo> + 'a>
     where
         A::State: Clone,
     {
         use std::ops::Bound;
-        let range_builder = self.termdict.search(automaton);
+        let range_builder = self.terms_ext(reverse)?.search(automaton);
         let range_builder = match terms.start_bound() {
             Bound::Included(bound) => range_builder.ge(bound.serialized_value_bytes()),
             Bound::Excluded(bound) => range_builder.gt(bound.serialized_value_bytes()),
@@ -309,7 +320,7 @@ impl InvertedIndexReader {
         with_positions: bool,
     ) -> io::Result<bool> {
         let mut term_info = self
-            .get_term_range_async(terms, AlwaysMatch, limit, 0)
+            .get_term_range_async(terms, AlwaysMatch, limit, 0, false)
             .await?;
 
         let Some(first_terminfo) = term_info.next() else {
@@ -404,6 +415,7 @@ impl InvertedIndexReader {
         &self,
         automaton: A,
         with_positions: bool,
+        reverse: bool,
         executor: E,
     ) -> io::Result<bool>
     where
@@ -415,13 +427,19 @@ impl InvertedIndexReader {
         // we build a first iterator to download everything. Simply calling the function already
         // download everything we need from the sstable, but doesn't start iterating over it.
         let _term_info_iter = self
-            .get_term_range_async(.., automaton.clone(), None, MERGE_HOLES_UNDER_BYTES)
+            .get_term_range_async(
+                ..,
+                automaton.clone(),
+                None,
+                MERGE_HOLES_UNDER_BYTES,
+                reverse,
+            )
             .await?;
 
         let (posting_sender, posting_ranges_to_load_stream) = futures_channel::mpsc::unbounded();
         let (positions_sender, positions_ranges_to_load_stream) =
             futures_channel::mpsc::unbounded();
-        let termdict = self.termdict.clone();
+        let termdict = self.terms_ext(reverse)?.clone();
         let cpu_bound_task = move || {
             // then we build a 2nd iterator, this one with no holes, so we don't go through blocks
             // we can't match.
