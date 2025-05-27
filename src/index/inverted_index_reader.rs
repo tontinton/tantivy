@@ -337,6 +337,11 @@ impl InvertedIndexReader {
         Ok(true)
     }
 
+    #[inline]
+    fn close_enough(a: &std::ops::Range<usize>, b: &std::ops::Range<usize>, gap: usize) -> bool {
+        a.start <= b.end + gap && b.start <= a.end + gap
+    }
+
     fn coalesce_and_send_ranges<I>(
         stream: I,
         posting_sender: impl Fn(std::ops::Range<usize>) -> std::io::Result<()>,
@@ -351,7 +356,8 @@ impl InvertedIndexReader {
 
         for (postings_range, positions_range) in stream {
             curr_postings = match curr_postings.take() {
-                Some(mut curr) if curr.end + merge_gap >= postings_range.start => {
+                Some(mut curr) if Self::close_enough(&curr, &postings_range, merge_gap) => {
+                    curr.start = curr.start.min(postings_range.start);
                     curr.end = curr.end.max(postings_range.end);
                     Some(curr)
                 }
@@ -363,7 +369,8 @@ impl InvertedIndexReader {
             };
 
             curr_positions = match curr_positions.take() {
-                Some(mut curr) if curr.end + merge_gap >= positions_range.start => {
+                Some(mut curr) if Self::close_enough(&curr, &positions_range, merge_gap) => {
+                    curr.start = curr.start.min(positions_range.start);
                     curr.end = curr.end.max(positions_range.end);
                     Some(curr)
                 }
@@ -622,5 +629,92 @@ mod test {
 
         assert!(postings.borrow().is_empty());
         assert!(positions.borrow().is_empty());
+    }
+
+    #[test]
+    fn test_unsorted_merge() {
+        let input = vec![(11..20, 111..120), (0..10, 100..110)]; // reverse order
+        let merge_gap = 2;
+
+        let postings = RefCell::new(vec![]);
+        let positions = RefCell::new(vec![]);
+
+        let posting_sender = |r| {
+            postings.borrow_mut().push(r);
+            Ok(())
+        };
+        let positions_sender = |r| {
+            positions.borrow_mut().push(r);
+            Ok(())
+        };
+
+        InvertedIndexReader::coalesce_and_send_ranges(
+            input.into_iter(),
+            posting_sender,
+            positions_sender,
+            merge_gap,
+        )
+        .unwrap();
+
+        assert_eq!(postings.into_inner(), vec![0..20]);
+        assert_eq!(positions.into_inner(), vec![100..120]);
+    }
+
+    #[test]
+    fn test_unsorted_no_merge() {
+        let input = vec![(20..30, 120..130), (0..10, 100..110)]; // unsorted
+        let merge_gap = 5; // gap < 10 --> no merge
+
+        let postings = RefCell::new(vec![]);
+        let positions = RefCell::new(vec![]);
+
+        let posting_sender = |r| {
+            postings.borrow_mut().push(r);
+            Ok(())
+        };
+        let positions_sender = |r| {
+            positions.borrow_mut().push(r);
+            Ok(())
+        };
+
+        InvertedIndexReader::coalesce_and_send_ranges(
+            input.into_iter(),
+            posting_sender,
+            positions_sender,
+            merge_gap,
+        )
+        .unwrap();
+
+        assert_eq!(postings.into_inner(), vec![20..30, 0..10]);
+        assert_eq!(positions.into_inner(), vec![120..130, 100..110]);
+    }
+
+    #[test]
+    fn test_unsorted_overlap_merge() {
+        let input = vec![(20..25, 120..125), (10..30, 110..140)];
+        let merge_gap = 0; // direct overlap
+
+        let postings = RefCell::new(vec![]);
+        let positions = RefCell::new(vec![]);
+
+        let posting_sender = |r| {
+            postings.borrow_mut().push(r);
+            Ok(())
+        };
+        let positions_sender = |r| {
+            positions.borrow_mut().push(r);
+            Ok(())
+        };
+
+        InvertedIndexReader::coalesce_and_send_ranges(
+            input.into_iter(),
+            posting_sender,
+            positions_sender,
+            merge_gap,
+        )
+        .unwrap();
+
+        assert_eq!(postings.into_inner(), vec![10..30]);
+        assert_eq!(positions.into_inner(), vec![110..140]);
     }
 }
