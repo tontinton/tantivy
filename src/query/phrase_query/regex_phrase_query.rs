@@ -22,7 +22,7 @@ use crate::schema::{Field, IndexRecordOption, Term, Type};
 #[derive(Clone, Debug)]
 pub struct RegexPhraseQuery {
     field: Field,
-    phrase_terms: Vec<(usize, Term)>,
+    phrase_terms: Vec<(usize, Term, bool)>,
     slop: u32,
     max_expansions: u32,
     must_start: bool,
@@ -75,14 +75,28 @@ impl RegexPhraseQuery {
     /// Creates a new `RegexPhraseQuery` given a list of tantivy terms, their offsets and a slop
     pub fn new_with_term_offset_and_slop(
         field: Field,
-        mut terms: Vec<(usize, Term)>,
+        terms: Vec<(usize, Term)>,
+        slop: u32,
+    ) -> RegexPhraseQuery {
+        Self::new_with_term_offset_slop_and_reverse(
+            field,
+            terms.into_iter().map(|(a, b)| (a, b, false)).collect(),
+            slop,
+        )
+    }
+
+    /// Creates a new `RegexPhraseQuery` given a list of tantivy terms, their offsets, slop, and
+    /// whether to load each term using the reverse term dict.
+    pub fn new_with_term_offset_slop_and_reverse(
+        field: Field,
+        mut terms: Vec<(usize, Term, bool)>,
         slop: u32,
     ) -> RegexPhraseQuery {
         assert!(
             terms.len() > 1,
             "A phrase query is required to have strictly more than one term."
         );
-        terms.sort_by_key(|&(offset, _)| offset);
+        terms.sort_by_key(|&(offset, _, _)| offset);
         RegexPhraseQuery {
             field,
             phrase_terms: terms,
@@ -130,7 +144,7 @@ impl RegexPhraseQuery {
     pub fn phrase_terms(&self) -> Vec<Term> {
         self.phrase_terms
             .iter()
-            .map(|(_, term)| term.clone())
+            .map(|(_, term, _)| term.clone())
             .collect::<Vec<Term>>()
     }
 

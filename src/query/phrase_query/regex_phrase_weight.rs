@@ -18,7 +18,7 @@ type UnionType = SimpleUnion<Box<dyn Postings + 'static>>;
 /// See RegexPhraseWeight::get_union_from_term_infos for some design decisions.
 pub struct RegexPhraseWeight {
     field: Field,
-    phrase_terms: Vec<(usize, Term)>,
+    phrase_terms: Vec<(usize, Term, bool)>,
     similarity_weight_opt: Option<Bm25Weight>,
     slop: u32,
     max_expansions: u32,
@@ -30,7 +30,7 @@ impl RegexPhraseWeight {
     /// If `similarity_weight_opt` is None, then scoring is disabled
     pub fn new(
         field: Field,
-        phrase_terms: Vec<(usize, Term)>,
+        phrase_terms: Vec<(usize, Term, bool)>,
         similarity_weight_opt: Option<Bm25Weight>,
         max_expansions: u32,
         slop: u32,
@@ -107,8 +107,11 @@ impl RegexPhraseWeight {
         let mut posting_lists = Vec::new();
         let inverted_index = reader.inverted_index(self.field)?;
         let mut num_terms = 0;
-        for &(offset, ref term) in &self.phrase_terms {
-            let automaton = Self::term_to_regex_automaton(term)?;
+        for &(offset, ref term, reverse) in &self.phrase_terms {
+            let mut automaton = Self::term_to_regex_automaton(term)?;
+            if reverse {
+                automaton.set_reverse();
+            }
             let term_infos = automaton.get_match_term_infos(reader)?;
             // If term_infos is empty, the phrase can not match any documents.
             if term_infos.is_empty() {

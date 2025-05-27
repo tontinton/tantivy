@@ -22,6 +22,7 @@ pub struct AutomatonWeight<A> {
     // dictionary. This prevents terms from unrelated paths from matching the search criteria.
     json_path_bytes: Option<Box<[u8]>>,
     must_start: bool,
+    reverse: bool,
 }
 
 impl<A> AutomatonWeight<A>
@@ -36,6 +37,7 @@ where
             automaton: automaton.into(),
             json_path_bytes: None,
             must_start: false,
+            reverse: false,
         }
     }
 
@@ -50,12 +52,18 @@ where
             automaton: automaton.into(),
             json_path_bytes: Some(json_path_bytes.to_vec().into_boxed_slice()),
             must_start: false,
+            reverse: false,
         }
     }
 
     /// Whether the beginning of the field must start with the term
     pub fn set_must_start(&mut self, must_start: bool) {
         self.must_start = must_start;
+    }
+
+    /// Load from reverse term dict.
+    pub fn set_reverse(&mut self) {
+        self.reverse = true;
     }
 
     fn automaton_stream<'a>(
@@ -78,7 +86,7 @@ where
     /// Returns the term infos that match the automaton
     pub fn get_match_term_infos(&self, reader: &SegmentReader) -> crate::Result<Vec<TermInfo>> {
         let inverted_index = reader.inverted_index(self.field)?;
-        let term_dict = inverted_index.terms();
+        let term_dict = inverted_index.terms_ext(self.reverse)?;
         let mut term_stream = self.automaton_stream(term_dict)?;
         let mut term_infos = Vec::new();
         while term_stream.advance() {
@@ -97,7 +105,7 @@ where
         let max_doc = reader.max_doc();
         let mut doc_bitset = BitSet::with_max_value(max_doc);
         let inverted_index = reader.inverted_index(self.field)?;
-        let term_dict = inverted_index.terms();
+        let term_dict = inverted_index.terms_ext(self.reverse)?;
         let mut term_stream = self.automaton_stream(term_dict)?;
         while term_stream.advance() {
             let term_info = term_stream.value();
