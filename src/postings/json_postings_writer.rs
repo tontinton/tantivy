@@ -66,6 +66,8 @@ impl<Rec: Recorder> PostingsWriter for JsonPostingsWriter<Rec> {
     ) -> io::Result<()> {
         let mut term_buffer = Term::with_capacity(48);
         let mut buffer_lender = BufferLender::default();
+        let mut reversed = Vec::with_capacity(ordered_term_addrs.len());
+
         term_buffer.clear_with_field_and_type(Type::Json, Field::from_field_id(0));
         let mut prev_term_id = u32::MAX;
         let mut term_path_len = 0; // this will be set in the first iteration
@@ -89,6 +91,12 @@ impl<Rec: Recorder> PostingsWriter for JsonPostingsWriter<Rec> {
                         ctx,
                         serializer,
                     )?;
+
+                    let mut rev = Vec::with_capacity(term_path_len + term.len());
+                    rev.extend(&term_buffer.serialized_value_bytes()[..term_path_len]);
+                    rev.push(typ as u8);
+                    rev.extend(term.iter().skip(1).rev().copied());
+                    reversed.push((rev, serializer.last_term_info().clone()));
                 } else {
                     SpecializedPostingsWriter::<DocIdRecorder>::serialize_one_term(
                         term_buffer.serialized_value_bytes(),
@@ -100,6 +108,12 @@ impl<Rec: Recorder> PostingsWriter for JsonPostingsWriter<Rec> {
                 }
             }
         }
+
+        reversed.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+        for (term, term_info) in reversed {
+            serializer.insert_reversed_term(&term, &term_info)?;
+        }
+
         Ok(())
     }
 
