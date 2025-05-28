@@ -54,15 +54,16 @@ fn posting_writer_from_field_entry(field_entry: &FieldEntry) -> Box<dyn Postings
         | FieldType::Facet(_) => Box::<SpecializedPostingsWriter<DocIdRecorder>>::default(),
         FieldType::JsonObject(ref json_object_options) => {
             if let Some(text_indexing_option) = json_object_options.get_text_indexing_options() {
+                let reverse = text_indexing_option.suffix();
                 match text_indexing_option.index_option() {
                     IndexRecordOption::Basic => {
-                        JsonPostingsWriter::<DocIdRecorder>::default().into()
+                        JsonPostingsWriter::<DocIdRecorder>::new(reverse).into()
                     }
                     IndexRecordOption::WithFreqs => {
-                        JsonPostingsWriter::<TermFrequencyRecorder>::default().into()
+                        JsonPostingsWriter::<TermFrequencyRecorder>::new(reverse).into()
                     }
                     IndexRecordOption::WithFreqsAndPositions => {
-                        JsonPostingsWriter::<TfAndPositionRecorder>::default().into()
+                        JsonPostingsWriter::<TfAndPositionRecorder>::new(reverse).into()
                     }
                 }
             } else {

@@ -19,6 +19,16 @@ use crate::{DocId, Term};
 pub(crate) struct JsonPostingsWriter<Rec: Recorder> {
     str_posting_writer: SpecializedPostingsWriter<Rec>,
     non_str_posting_writer: SpecializedPostingsWriter<DocIdRecorder>,
+    reverse: bool,
+}
+
+impl<Rec: Recorder> JsonPostingsWriter<Rec> {
+    pub(crate) fn new(reverse: bool) -> Self {
+        Self {
+            reverse,
+            ..Default::default()
+        }
+    }
 }
 
 impl<Rec: Recorder> From<JsonPostingsWriter<Rec>> for Box<dyn PostingsWriter> {
@@ -66,7 +76,12 @@ impl<Rec: Recorder> PostingsWriter for JsonPostingsWriter<Rec> {
     ) -> io::Result<()> {
         let mut term_buffer = Term::with_capacity(48);
         let mut buffer_lender = BufferLender::default();
-        let mut reversed = Vec::with_capacity(ordered_term_addrs.len());
+
+        let mut reversed = Vec::with_capacity(if self.reverse {
+            ordered_term_addrs.len()
+        } else {
+            0
+        });
 
         term_buffer.clear_with_field_and_type(Type::Json, Field::from_field_id(0));
         let mut prev_term_id = u32::MAX;
@@ -92,11 +107,13 @@ impl<Rec: Recorder> PostingsWriter for JsonPostingsWriter<Rec> {
                         serializer,
                     )?;
 
-                    let mut rev = Vec::with_capacity(term_path_len + term.len());
-                    rev.extend(&term_buffer.serialized_value_bytes()[..term_path_len]);
-                    rev.push(typ as u8);
-                    rev.extend(term.iter().skip(1).rev().copied());
-                    reversed.push((rev, serializer.last_term_info().clone()));
+                    if self.reverse {
+                        let mut rev = Vec::with_capacity(term_path_len + term.len());
+                        rev.extend(&term_buffer.serialized_value_bytes()[..term_path_len]);
+                        rev.push(typ as u8);
+                        rev.extend(term.iter().skip(1).rev().copied());
+                        reversed.push((rev, serializer.last_term_info().clone()));
+                    }
                 } else {
                     SpecializedPostingsWriter::<DocIdRecorder>::serialize_one_term(
                         term_buffer.serialized_value_bytes(),
@@ -109,9 +126,11 @@ impl<Rec: Recorder> PostingsWriter for JsonPostingsWriter<Rec> {
             }
         }
 
-        reversed.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-        for (term, term_info) in reversed {
-            serializer.insert_reversed_term(&term, &term_info)?;
+        if self.reverse {
+            reversed.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+            for (term, term_info) in reversed {
+                serializer.insert_reversed_term(&term, &term_info)?;
+            }
         }
 
         Ok(())
