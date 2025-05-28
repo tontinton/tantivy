@@ -14,6 +14,7 @@ use crate::fastfield::AliveBitSet;
 use crate::fieldnorm::{FieldNormReader, FieldNormReaders, FieldNormsSerializer, FieldNormsWriter};
 use crate::index::{Segment, SegmentComponent, SegmentReader};
 use crate::indexer::doc_id_mapping::{MappingType, SegmentDocIdMapping};
+use crate::indexer::revterm_merger::RevTermMerger;
 use crate::indexer::SegmentSerializer;
 use crate::postings::{InvertedIndexSerializer, Postings, SegmentPostings};
 use crate::schema::{value_type_to_column_type, Field, FieldType, Schema};
@@ -311,6 +312,7 @@ impl IndexMerger {
         }
 
         let mut merged_terms = TermMerger::new(field_term_streams);
+        let mut merged_revterms = RevTermMerger::new()?;
 
         // map from segment doc ids to the resulting merged segment doc id.
 
@@ -460,7 +462,11 @@ impl IndexMerger {
             }
             // closing the term.
             field_serializer.close_term()?;
+            if field_entry.field_type().is_json() {
+                merged_revterms.push(term_bytes, field_serializer.last_term_info().clone())?;
+            }
         }
+        merged_revterms.merge(&mut field_serializer)?;
         field_serializer.close()?;
         Ok(())
     }
