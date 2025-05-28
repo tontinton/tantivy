@@ -202,6 +202,12 @@ pub struct TextFieldIndexing {
     fieldnorms: bool,
     #[serde(default)]
     tokenizer: TokenizerName,
+
+    /// Also store strings reversed (in .revterm file) for faster suffix searches.
+    /// The .revterm file is ~2x times larger than the .term file.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_false")]
+    suffix: bool,
 }
 
 pub(crate) fn default_fieldnorms() -> bool {
@@ -214,6 +220,7 @@ impl Default for TextFieldIndexing {
             tokenizer: TokenizerName::default(),
             record: IndexRecordOption::default(),
             fieldnorms: default_fieldnorms(),
+            suffix: false,
         }
     }
 }
@@ -258,6 +265,18 @@ impl TextFieldIndexing {
     pub fn index_option(&self) -> IndexRecordOption {
         self.record
     }
+
+    /// Sets whether to index in the reversed termdict too.
+    #[must_use]
+    pub fn set_suffix(mut self, suffix: bool) -> TextFieldIndexing {
+        self.suffix = suffix;
+        self
+    }
+
+    /// Returns whether to index in reversed termdict.
+    pub fn suffix(&self) -> bool {
+        self.suffix
+    }
 }
 
 /// The field will be untokenized and indexed.
@@ -266,6 +285,7 @@ pub const STRING: TextOptions = TextOptions {
         tokenizer: TokenizerName::from_static(NO_TOKENIZER_NAME),
         fieldnorms: true,
         record: IndexRecordOption::Basic,
+        suffix: false,
     }),
     stored: false,
     fast: FastFieldTextOptions::IsEnabled(false),
@@ -278,6 +298,7 @@ pub const TEXT: TextOptions = TextOptions {
         tokenizer: TokenizerName::from_static(DEFAULT_TOKENIZER_NAME),
         fieldnorms: true,
         record: IndexRecordOption::WithFreqsAndPositions,
+        suffix: false,
     }),
     stored: false,
     coerce: false,
