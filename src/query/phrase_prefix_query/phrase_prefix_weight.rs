@@ -286,7 +286,7 @@ mod tests {
         let mut short_query = PhrasePrefixQuery::new(vec![Term::from_field_text(text_field, "b")]);
         // Without must_start - should match all docs (all contain "b")
         let mut scorer = short_query
-            .weight(enable_scoring.clone())
+            .weight(enable_scoring)
             .unwrap()
             .scorer(searcher.segment_reader(0u32), 1.0)?;
         assert_eq!(scorer.doc(), 0);
@@ -298,7 +298,7 @@ mod tests {
         // With must_start - should match only docs starting with "b"
         short_query.set_must_start(true);
         let mut scorer = short_query
-            .weight(enable_scoring.clone())
+            .weight(enable_scoring)
             .unwrap()
             .scorer(searcher.segment_reader(0u32), 1.0)?;
         assert_eq!(scorer.doc(), 2);
@@ -313,7 +313,7 @@ mod tests {
         ]);
         // Without must_start - should match all docs (all contains "bb")
         let mut scorer = mid_query
-            .weight(enable_scoring.clone())
+            .weight(enable_scoring)
             .unwrap()
             .scorer(searcher.segment_reader(0u32), 1.0)?;
         assert_eq!(scorer.doc(), 0);
@@ -325,7 +325,7 @@ mod tests {
         // With must_start - should only match docs starting with "bb c"
         mid_query.set_must_start(true);
         scorer = mid_query
-            .weight(enable_scoring.clone())
+            .weight(enable_scoring)
             .unwrap()
             .scorer(searcher.segment_reader(0u32), 1.0)?;
         assert_eq!(scorer.doc(), 2);
