@@ -81,7 +81,7 @@ mod tests {
         }
         let file = directory.open_read(path)?;
         {
-            let fields_composite = CompositeFile::open(&file)?;
+            let fields_composite: CompositeFile<usize> = CompositeFile::open(&file)?;
             assert!(fields_composite.open_read(*FIELD).is_none());
             assert!(fields_composite.open_read(*STR_FIELD).is_none());
             let data = fields_composite.open_read(*TXT_FIELD).unwrap();

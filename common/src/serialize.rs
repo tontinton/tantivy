@@ -287,6 +287,17 @@ impl<'a> BinarySerializable for Cow<'a, [u8]> {
     }
 }
 
+impl BinarySerializable for usize {
+    fn serialize<W: Write + ?Sized>(&self, writer: &mut W) -> io::Result<()> {
+        VInt(*self as u64).serialize(writer)
+    }
+
+    fn deserialize<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let vint = VInt::deserialize(reader)?;
+        Ok(vint.0 as usize)
+    }
+}
+
 #[cfg(test)]
 pub mod test {
 
