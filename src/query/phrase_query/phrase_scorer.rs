@@ -435,6 +435,10 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
         scorer
     }
 
+    pub fn fieldnorm_reader(&self) -> &FieldNormReader {
+        &self.fieldnorm_reader
+    }
+
     pub fn phrase_count(&self) -> u32 {
         self.phrase_count
     }
