@@ -287,6 +287,11 @@ impl Schema {
         self.get_field_entry(field).name()
     }
 
+    /// Return the field type for a given `Field`.
+    pub fn get_field_type(&self, field: Field) -> &FieldType {
+        self.get_field_entry(field).field_type()
+    }
+
     /// Returns the number of fields in the schema.
     pub fn num_fields(&self) -> usize {
         self.0.fields.len()
