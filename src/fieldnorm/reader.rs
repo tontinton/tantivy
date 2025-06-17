@@ -4,7 +4,7 @@ use super::{fieldnorm_to_id, id_to_fieldnorm};
 use crate::directory::{CompositeFile, FileSlice, OwnedBytes};
 use crate::schema::Field;
 use crate::space_usage::PerFieldSpaceUsage;
-use crate::DocId;
+use crate::{DocId, Term};
 
 /// Reader for the fieldnorm (for each document, the number of tokens indexed in the
 /// field) of all indexed fields in the index.
@@ -47,6 +47,15 @@ impl FieldNormReaders {
             Ok(Some(fieldnorm_reader))
         } else {
             Ok(None)
+        }
+    }
+
+    /// Returns the FieldNormReader for a specific field or a field,path according to term belonging
+    pub fn get_for_term(&self, term: &Term) -> crate::Result<Option<FieldNormReader>> {
+        let json_path = term.get_json_path();
+        match json_path {
+            Some(json_path) => self.get_json_field(term.field(), json_path),
+            None => self.get_field(term.field()),
         }
     }
 
