@@ -282,6 +282,11 @@ impl FieldUsage {
         self.num_bytes += size
     }
 
+    pub(crate) fn add_next_field_idx(&mut self, size: ByteCount) {
+        let next_idx = self.sub_num_bytes.len();
+        self.add_field_idx(next_idx, size);
+    }
+
     /// Field
     pub fn field(&self) -> Field {
         self.field

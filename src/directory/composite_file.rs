@@ -65,7 +65,8 @@ where T: BinarySerializable + Clone + Hash + Eq
     pub fn for_field_with_idx(&mut self, field: Field, idx: T) -> &mut CountingWriter<W> {
         let offset: u64 = self.write.written_bytes();
         let file_addr = FileAddr::new(field, idx);
-        assert!(!self.offsets.iter().any(|el| el.0 == file_addr));
+        // Vega: commented by us, we added support for having multiple indexes for the same field.
+        // assert!(!self.offsets.iter().any(|el| el.0 == file_addr));
         self.offsets.push((file_addr, offset));
         &mut self.write
     }
@@ -179,13 +180,22 @@ where T: BinarySerializable + Clone + Hash + Eq
     }
 
     pub fn space_usage(&self) -> PerFieldSpaceUsage {
-        let mut fields = Vec::new();
-        for (&field_addr, byte_range) in &self.offsets_index {
-            let mut field_usage = FieldUsage::empty(field_addr.field);
-            field_usage.add_field_idx(field_addr.idx, byte_range.len().into());
-            fields.push(field_usage);
+        let mut field_usages: HashMap<Field, FieldUsage> = HashMap::new();
+        for (field_addr, byte_range) in &self.offsets_index {
+            let field_usage: &mut FieldUsage = field_usages
+                .entry(field_addr.field)
+                .or_insert_with(|| FieldUsage::empty(field_addr.field));
+            field_usage.add_next_field_idx(byte_range.len().into());
         }
-        PerFieldSpaceUsage::new(fields)
+        PerFieldSpaceUsage::new(field_usages.into_values().collect())
+    }
+
+    pub fn get_field_indexes(&self, field: Field) -> Vec<T> {
+        self.offsets_index
+            .keys()
+            .filter(|file_addr| file_addr.field == field)
+            .map(|file_addr| file_addr.idx.clone())
+            .collect()
     }
 }
 
