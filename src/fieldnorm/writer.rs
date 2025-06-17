@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
 use std::{io, iter};
 
+use hashbrown::HashMap;
+
 use super::{fieldnorm_to_id, FieldNormsSerializer};
 use crate::schema::{Field, Schema};
 use crate::DocId;
@@ -12,16 +14,20 @@ use crate::DocId;
 /// byte per document per field.
 pub struct FieldNormsWriter {
     fieldnorms_buffers: Vec<Option<Vec<u8>>>,
+    json_fieldnorms_buffers: HashMap<Field, HashMap<String, Vec<u8>>>,
 }
 
 impl FieldNormsWriter {
-    /// Returns the fields that should have field norms computed
+    /// Returns static fields that should have field norms computed
     /// according to the given schema.
     pub(crate) fn fields_with_fieldnorm(schema: &Schema) -> Vec<Field> {
         schema
             .fields()
             .filter_map(|(field, field_entry)| {
-                if field_entry.is_indexed() && field_entry.has_fieldnorms() {
+                if field_entry.is_indexed()
+                    && !field_entry.field_type().is_json()
+                    && field_entry.has_fieldnorms()
+                {
                     Some(field)
                 } else {
                     None
@@ -39,17 +45,36 @@ impl FieldNormsWriter {
         for field in FieldNormsWriter::fields_with_fieldnorm(schema) {
             fieldnorms_buffers[field.field_id() as usize] = Some(Vec::with_capacity(1_000));
         }
-        FieldNormsWriter { fieldnorms_buffers }
+
+        let mut json_fieldnorms_buffers = HashMap::new();
+        for field in FieldNormsWriter::json_fieldnorm_fields(schema) {
+            json_fieldnorms_buffers.insert(field, HashMap::new());
+        }
+
+        FieldNormsWriter {
+            fieldnorms_buffers,
+            json_fieldnorms_buffers,
+        }
     }
 
     /// The memory used inclusive childs
     pub fn mem_usage(&self) -> usize {
-        self.fieldnorms_buffers
+        let regular_usage: usize = self
+            .fieldnorms_buffers
             .iter()
             .flatten()
             .map(|buf| buf.capacity())
-            .sum()
+            .sum();
+
+        let json_usage: usize = self
+            .json_fieldnorms_buffers
+            .values()
+            .map(|buf| buf.values().map(|buf| buf.capacity()).sum::<usize>())
+            .sum();
+
+        regular_usage + json_usage
     }
+
     /// Ensure that all documents in 0..max_doc have a byte associated with them
     /// in each of the fieldnorm vectors.
     ///
@@ -59,6 +84,12 @@ impl FieldNormsWriter {
             if let Some(fieldnorms_buffer) = fieldnorms_buffer_opt.as_mut() {
                 fieldnorms_buffer.resize(max_doc as usize, 0u8);
             }
+        }
+
+        for field_fieldnorms_buffers in self.json_fieldnorms_buffers.values_mut() {
+            field_fieldnorms_buffers
+                .values_mut()
+                .for_each(|path_fieldnorms_buf| path_fieldnorms_buf.resize(max_doc as usize, 0u8));
         }
     }
 
@@ -90,6 +121,48 @@ impl FieldNormsWriter {
         }
     }
 
+    /// Set the fieldnorm byte for the given document for the given JSON field and its path.
+    ///
+    /// Will internally convert the u32 `fieldnorm` value to the appropriate byte
+    /// to approximate the field norm in less space.
+    ///
+    /// * doc       - the document id
+    /// * field     - the field being set
+    /// * path      - the JSON path within the field
+    /// * fieldnorm - the number of terms present in document `doc` in field `field` at `path`
+    pub fn record_json(&mut self, doc: DocId, field: Field, path: &str, fieldnorm: u32) {
+        let doc_idx = doc as usize;
+        let fieldnorm_buffer = self
+            .json_fieldnorms_buffers
+            .get_mut(&field)
+            .unwrap()
+            .raw_entry_mut()
+            .from_key(path)
+            .or_insert_with(|| {
+                (
+                    path.to_string(),
+                    Vec::with_capacity(std::cmp::max(1000, doc_idx + 1)),
+                )
+            })
+            .1;
+
+        match fieldnorm_buffer.len().cmp(&doc_idx) {
+            Ordering::Less => {
+                // we fill intermediary `DocId` as having a fieldnorm of 0.
+                fieldnorm_buffer.resize(doc_idx, 0u8);
+            }
+            Ordering::Equal => {}
+            Ordering::Greater => {
+                // Note: We currently don't handle json arrays properly, each text value in the
+                // array will get here with the json path.
+                // Current behavior is to skip (first-write wins)
+                return;
+            }
+        }
+
+        fieldnorm_buffer.push(fieldnorm_to_id(fieldnorm));
+    }
+
     /// Serialize the seen fieldnorm values to the serializer for all fields.
     pub fn serialize(&self, mut fieldnorms_serializer: FieldNormsSerializer) -> io::Result<()> {
         for (field, fieldnorms_buffer) in self.fieldnorms_buffers.iter().enumerate().filter_map(
@@ -101,6 +174,17 @@ impl FieldNormsWriter {
         ) {
             fieldnorms_serializer.serialize_field(field, fieldnorms_buffer)?;
         }
+
+        for (field, path_map) in &self.json_fieldnorms_buffers {
+            for (path, fieldnorms_buffer) in path_map {
+                fieldnorms_serializer.serialize_field_path(
+                    *field,
+                    path.to_string(),
+                    fieldnorms_buffer,
+                )?;
+            }
+        }
+
         fieldnorms_serializer.close()?;
         Ok(())
     }

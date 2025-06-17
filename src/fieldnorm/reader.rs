@@ -14,13 +14,13 @@ use crate::DocId;
 /// The mapping from `fieldnorm` to `fieldnorm_id` is given by monotonic.
 #[derive(Clone)]
 pub struct FieldNormReaders {
-    data: Arc<CompositeFile>,
+    data: Arc<CompositeFile<String>>,
 }
 
 impl FieldNormReaders {
     /// Creates a field norm reader.
     pub fn open(file: FileSlice) -> crate::Result<FieldNormReaders> {
-        let data = CompositeFile::open(&file)?;
+        let data: CompositeFile<String> = CompositeFile::open(&file)?;
         Ok(FieldNormReaders {
             data: Arc::new(data),
         })
@@ -36,13 +36,27 @@ impl FieldNormReaders {
         }
     }
 
+    /// Returns the FieldNormReader for a specific field and JSON path.
+    pub fn get_json_field(
+        &self,
+        field: Field,
+        json_path: String,
+    ) -> crate::Result<Option<FieldNormReader>> {
+        if let Some(file) = self.data.open_read_with_idx(field, json_path) {
+            let fieldnorm_reader = FieldNormReader::open(file)?;
+            Ok(Some(fieldnorm_reader))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Return a break down of the space usage per field.
     pub fn space_usage(&self) -> PerFieldSpaceUsage {
         self.data.space_usage()
     }
 
     /// Returns a handle to inner file
-    pub fn get_inner_file(&self) -> Arc<CompositeFile> {
+    pub fn get_inner_file(&self) -> Arc<CompositeFile<String>> {
         self.data.clone()
     }
 }

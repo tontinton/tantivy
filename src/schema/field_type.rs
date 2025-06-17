@@ -295,7 +295,10 @@ impl FieldType {
             FieldType::Date(ref date_options) => date_options.fieldnorms(),
             FieldType::Facet(_) => false,
             FieldType::Bytes(ref bytes_options) => bytes_options.fieldnorms(),
-            FieldType::JsonObject(ref _json_object_options) => false,
+            FieldType::JsonObject(ref json_object_options) => json_object_options
+                .get_text_indexing_options()
+                .map(|options| options.fieldnorms())
+                .unwrap_or(false),
             FieldType::IpAddr(ref ip_addr_options) => ip_addr_options.fieldnorms(),
         }
     }
