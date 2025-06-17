@@ -308,16 +308,21 @@ impl SegmentWriter {
                     self.json_positions_per_path.clear();
                     self.json_path_writer
                         .set_expand_dots(json_options.is_expand_dots_enabled());
+                    let mut json_fieldnorm_writer = field_entry
+                        .has_fieldnorms()
+                        .then(|| &mut self.fieldnorms_writer);
                     for json_value in values {
                         self.json_path_writer.clear();
 
                         index_json_value(
                             doc_id,
+                            field,
                             json_value,
                             text_analyzer,
                             term_buffer,
                             &mut self.json_path_writer,
                             postings_writer,
+                            &mut json_fieldnorm_writer,
                             ctx,
                             &mut self.json_positions_per_path,
                         );

@@ -2,9 +2,10 @@ use common::json_path_writer::{JSON_END_OF_PATH, JSON_PATH_SEGMENT_SEP};
 use common::{replace_in_place, JsonPathWriter};
 use rustc_hash::FxHashMap;
 
+use crate::fieldnorm::FieldNormsWriter;
 use crate::postings::{IndexingContext, IndexingPosition, PostingsWriter};
 use crate::schema::document::{ReferenceValue, ReferenceValueLeaf, Value};
-use crate::schema::{Type, DATE_TIME_PRECISION_INDEXED};
+use crate::schema::{Field, Type, DATE_TIME_PRECISION_INDEXED};
 use crate::time::format_description::well_known::Rfc3339;
 use crate::time::{OffsetDateTime, UtcOffset};
 use crate::tokenizer::TextAnalyzer;
@@ -74,11 +75,13 @@ pub fn json_path_sep_to_dot(path: &mut str) {
 #[expect(clippy::too_many_arguments)]
 fn index_json_object<'a, V: Value<'a>>(
     doc: DocId,
+    field: Field,
     json_visitor: V::ObjectIter,
     text_analyzer: &mut TextAnalyzer,
     term_buffer: &mut Term,
     json_path_writer: &mut JsonPathWriter,
     postings_writer: &mut dyn PostingsWriter,
+    fieldnorms_writer: &mut Option<&mut FieldNormsWriter>,
     ctx: &mut IndexingContext,
     positions_per_path: &mut IndexingPositionsPerPath,
 ) {
@@ -89,11 +92,13 @@ fn index_json_object<'a, V: Value<'a>>(
         json_path_writer.push(json_path_segment);
         index_json_value(
             doc,
+            field,
             json_value_visitor,
             text_analyzer,
             term_buffer,
             json_path_writer,
             postings_writer,
+            fieldnorms_writer,
             ctx,
             positions_per_path,
         );
@@ -104,11 +109,13 @@ fn index_json_object<'a, V: Value<'a>>(
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn index_json_value<'a, V: Value<'a>>(
     doc: DocId,
+    field: Field,
     json_value: V,
     text_analyzer: &mut TextAnalyzer,
     term_buffer: &mut Term,
     json_path_writer: &mut JsonPathWriter,
     postings_writer: &mut dyn PostingsWriter,
+    fieldnorms_writer: &mut Option<&mut FieldNormsWriter>,
     ctx: &mut IndexingContext,
     positions_per_path: &mut IndexingPositionsPerPath,
 ) {
@@ -140,6 +147,17 @@ pub(crate) fn index_json_value<'a, V: Value<'a>>(
                     ctx,
                     indexing_position,
                 );
+
+                // Record value's fieldnorm for json-path only if fieldnorms are enabled for the
+                // parent json field.
+                if let Some(fieldnorms_writer) = fieldnorms_writer.as_mut() {
+                    fieldnorms_writer.record_json(
+                        doc,
+                        field,
+                        json_path_writer.as_str(),
+                        indexing_position.num_tokens,
+                    );
+                }
             }
             ReferenceValueLeaf::U64(val) => {
                 // try to parse to i64, since when querying we will apply the same logic and prefer
@@ -212,11 +230,13 @@ pub(crate) fn index_json_value<'a, V: Value<'a>>(
             for val in elements {
                 index_json_value(
                     doc,
+                    field,
                     val,
                     text_analyzer,
                     term_buffer,
                     json_path_writer,
                     postings_writer,
+                    fieldnorms_writer,
                     ctx,
                     positions_per_path,
                 );
@@ -225,11 +245,13 @@ pub(crate) fn index_json_value<'a, V: Value<'a>>(
         ReferenceValue::Object(object) => {
             index_json_object::<V>(
                 doc,
+                field,
                 object,
                 text_analyzer,
                 term_buffer,
                 json_path_writer,
                 postings_writer,
+                fieldnorms_writer,
                 ctx,
                 positions_per_path,
             );
