@@ -18,22 +18,28 @@ pub struct FieldNormsWriter {
 }
 
 impl FieldNormsWriter {
-    /// Returns static fields that should have field norms computed
-    /// according to the given schema.
-    pub(crate) fn fields_with_fieldnorm(schema: &Schema) -> Vec<Field> {
+    fn fieldnorm_fields(schema: &Schema) -> impl Iterator<Item = (Field, bool)> + '_ {
         schema
             .fields()
-            .filter_map(|(field, field_entry)| {
-                if field_entry.is_indexed()
-                    && !field_entry.field_type().is_json()
-                    && field_entry.has_fieldnorms()
-                {
-                    Some(field)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
+            .filter(|(_, field_entry)| field_entry.is_indexed() && field_entry.has_fieldnorms())
+            .map(|(field, field_entry)| (field, field_entry.field_type().is_json()))
+    }
+
+    /// Returns static & json fields that should have field norms computed according to the given
+    /// schema.
+    pub(crate) fn fields_with_fieldnorm(schema: &Schema) -> (Vec<Field>, Vec<Field>) {
+        let mut static_fields = Vec::new();
+        let mut json_fields = Vec::new();
+
+        for (field, is_json) in Self::fieldnorm_fields(schema) {
+            if is_json {
+                json_fields.push(field);
+            } else {
+                static_fields.push(field);
+            }
+        }
+
+        (static_fields, json_fields)
     }
 
     /// Initialize with state for tracking the field norm fields
@@ -42,12 +48,14 @@ impl FieldNormsWriter {
         let mut fieldnorms_buffers: Vec<Option<Vec<u8>>> = iter::repeat_with(|| None)
             .take(schema.num_fields())
             .collect();
-        for field in FieldNormsWriter::fields_with_fieldnorm(schema) {
+
+        let (static_fields, json_fields) = Self::fields_with_fieldnorm(schema);
+        for field in static_fields {
             fieldnorms_buffers[field.field_id() as usize] = Some(Vec::with_capacity(1_000));
         }
 
         let mut json_fieldnorms_buffers = HashMap::new();
-        for field in FieldNormsWriter::json_fieldnorm_fields(schema) {
+        for field in json_fields {
             json_fieldnorms_buffers.insert(field, HashMap::new());
         }
 

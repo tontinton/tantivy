@@ -198,9 +198,10 @@ impl IndexMerger {
         mut fieldnorms_serializer: FieldNormsSerializer,
         doc_id_mapping: &SegmentDocIdMapping,
     ) -> crate::Result<()> {
-        let fields = FieldNormsWriter::fields_with_fieldnorm(&self.schema);
         let mut fieldnorms_data = Vec::with_capacity(self.max_doc as usize);
-        for field in fields {
+
+        let (static_fields, json_fields) = FieldNormsWriter::fields_with_fieldnorm(&self.schema);
+        for field in static_fields {
             fieldnorms_data.clear();
             let fieldnorms_readers: Vec<FieldNormReader> = self
                 .readers
@@ -214,6 +215,39 @@ impl IndexMerger {
             }
             fieldnorms_serializer.serialize_field(field, &fieldnorms_data[..])?;
         }
+
+        for field in json_fields {
+            // Collect unique paths seen across segments for this field
+            let mut json_paths = std::collections::BTreeSet::new();
+            for reader in &self.readers {
+                if let Some(paths) = reader.get_json_field_path_list(field) {
+                    json_paths.extend(paths);
+                }
+            }
+
+            // Merge for each (field, json-path) pair
+            for path in json_paths {
+                fieldnorms_data.clear();
+                let path_readers: Vec<_> = self
+                    .readers
+                    .iter()
+                    .map(|reader| reader.get_fieldnorms_json_reader(field, path.clone()))
+                    .map(Result::ok)
+                    .collect();
+
+                for old_doc_addr in doc_id_mapping.iter_old_doc_addrs() {
+                    let reader_opt = &path_readers[old_doc_addr.segment_ord as usize];
+                    let fieldnorm_id = reader_opt
+                        .as_ref()
+                        .map(|reader| reader.fieldnorm_id(old_doc_addr.doc_id))
+                        .unwrap_or(0); // missing path for this doc (no doc in this segment with this path)
+                    fieldnorms_data.push(fieldnorm_id);
+                }
+                fieldnorms_data.resize(self.max_doc as usize, 0u8);
+                fieldnorms_serializer.serialize_field_path(field, path, &fieldnorms_data)?;
+            }
+        }
+
         fieldnorms_serializer.close()?;
         Ok(())
     }

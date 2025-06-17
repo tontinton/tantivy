@@ -127,6 +127,40 @@ impl SegmentReader {
         })
     }
 
+    /// Accessor to the segment's `Field norms`'s reader for a specific JSON path.
+    ///
+    /// Field norms are the length (in tokens) of the fields.
+    /// It is used in the computation of the [TfIdf](https://fulmicoton.gitbooks.io/tantivy-doc/content/tfidf.html).
+    ///
+    /// They are simply stored as a fast field, serialized in
+    /// the `.fieldnorm` file of the segment.
+    pub fn get_fieldnorms_json_reader(
+        &self,
+        field: Field,
+        json_path: String,
+    ) -> crate::Result<FieldNormReader> {
+        let json_path_clone = json_path.clone();
+        self.fieldnorm_readers
+            .get_json_field(field, json_path)?
+            .ok_or_else(|| {
+                let field_name = self.schema.get_field_name(field);
+                let err_msg = format!(
+                    "Field norm not found for path {:?} under the json field {field_name:?}. Was \
+                     the field set to record norm during indexing?",
+                    json_path_clone
+                );
+                crate::TantivyError::SchemaError(err_msg)
+            })
+    }
+
+    /// Returns the list of JSON paths with fieldnorms recorded for a given field.
+    pub fn get_json_field_path_list(&self, field: Field) -> Option<Vec<String>> {
+        if self.schema.get_field_type(field).is_json() {
+            return Some(self.fieldnorm_readers.get_json_field_path_list(field));
+        }
+        None
+    }
+
     #[doc(hidden)]
     pub fn fieldnorms_readers(&self) -> &FieldNormReaders {
         &self.fieldnorm_readers

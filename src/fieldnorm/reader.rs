@@ -50,6 +50,11 @@ impl FieldNormReaders {
         }
     }
 
+    /// Returns the list of JSON paths for a given field.
+    pub fn get_json_field_path_list(&self, field: Field) -> Vec<String> {
+        self.data.get_field_indexes(field)
+    }
+
     /// Return a break down of the space usage per field.
     pub fn space_usage(&self) -> PerFieldSpaceUsage {
         self.data.space_usage()
