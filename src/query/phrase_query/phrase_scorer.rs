@@ -57,6 +57,16 @@ impl Default for PhraseScorerFlags {
     }
 }
 
+impl PhraseScorerFlags {
+    pub fn with(self, other: Self, value: bool) -> Self {
+        if value {
+            self | other
+        } else {
+            self
+        }
+    }
+}
+
 pub struct PhraseScorer<TPostings: Postings> {
     intersection_docset: Intersection<PostingsWithOffset<TPostings>, PostingsWithOffset<TPostings>>,
     num_terms: usize,

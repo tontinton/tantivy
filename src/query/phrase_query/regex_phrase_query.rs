@@ -26,6 +26,7 @@ pub struct RegexPhraseQuery {
     slop: u32,
     max_expansions: u32,
     must_start: bool,
+    must_end: bool,
 }
 
 /// Transform a wildcard query to a regex string.
@@ -103,6 +104,7 @@ impl RegexPhraseQuery {
             slop,
             max_expansions: 1 << 14,
             must_start: false,
+            must_end: false,
         }
     }
 
@@ -133,6 +135,11 @@ impl RegexPhraseQuery {
     /// Whether the beginning of the field must start with phrase prefix query.
     pub fn set_must_start(&mut self, value: bool) {
         self.must_start = value;
+    }
+
+    /// Whether the field's value must end with phrase prefix query.
+    pub fn set_must_end(&mut self, value: bool) {
+        self.must_end = value;
     }
 
     /// The [`Field`] this `RegexPhraseQuery` is targeting.
@@ -194,6 +201,7 @@ impl RegexPhraseQuery {
             self.max_expansions,
             self.slop,
             self.must_start,
+            self.must_end,
         );
         Ok(weight)
     }

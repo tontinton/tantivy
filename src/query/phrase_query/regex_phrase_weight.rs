@@ -23,6 +23,7 @@ pub struct RegexPhraseWeight {
     slop: u32,
     max_expansions: u32,
     must_start: bool,
+    must_end: bool,
 }
 
 impl RegexPhraseWeight {
@@ -35,6 +36,7 @@ impl RegexPhraseWeight {
         max_expansions: u32,
         slop: u32,
         must_start: bool,
+        must_end: bool,
     ) -> RegexPhraseWeight {
         RegexPhraseWeight {
             field,
@@ -43,16 +45,19 @@ impl RegexPhraseWeight {
             slop,
             max_expansions,
             must_start,
+            must_end,
         }
     }
 
     fn fieldnorm_reader(&self, reader: &SegmentReader) -> crate::Result<FieldNormReader> {
-        if self.similarity_weight_opt.is_some() {
-            if let Some(fieldnorm_reader) = reader.fieldnorms_readers().get_field(self.field)? {
-                return Ok(fieldnorm_reader);
-            }
+        if !self.must_end && self.similarity_weight_opt.is_none() {
+            return Ok(FieldNormReader::constant(reader.max_doc(), 1));
         }
-        Ok(FieldNormReader::constant(reader.max_doc(), 1))
+
+        Ok(reader
+            .fieldnorms_readers()
+            .get_for_term(&self.phrase_terms[0].1)?
+            .unwrap_or_else(|| FieldNormReader::constant(reader.max_doc(), 1)))
     }
 
     fn term_to_regex_automaton(term: &Term) -> crate::Result<AutomatonWeight<Regex>> {
@@ -134,11 +139,9 @@ impl RegexPhraseWeight {
             similarity_weight_opt,
             fieldnorm_reader,
             self.slop,
-            if self.must_start {
-                PhraseScorerFlags::MUST_START
-            } else {
-                PhraseScorerFlags::default()
-            },
+            PhraseScorerFlags::default()
+                .with(PhraseScorerFlags::MUST_START, self.must_start)
+                .with(PhraseScorerFlags::MUST_END, self.must_end),
         )))
     }
 
@@ -331,8 +334,7 @@ impl Weight for RegexPhraseWeight {
         if scorer.seek(doc) != doc {
             return Err(does_not_match(doc));
         }
-        let fieldnorm_reader = self.fieldnorm_reader(reader)?;
-        let fieldnorm_id = fieldnorm_reader.fieldnorm_id(doc);
+        let fieldnorm_id = scorer.fieldnorm_reader().fieldnorm_id(doc);
         let phrase_count = scorer.phrase_count();
         let mut explanation = Explanation::new("Phrase Scorer", scorer.score());
         if let Some(similarity_weight) = self.similarity_weight_opt.as_ref() {
