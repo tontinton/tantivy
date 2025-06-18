@@ -40,6 +40,8 @@ mod tests {
     };
     use crate::{Index, Term, TERMINATED};
 
+    pub const DYNAMIC_FIELD_NAME: &str = "_dynamic";
+
     pub static SCHEMA: Lazy<Schema> = Lazy::new(|| {
         let mut schema_builder = Schema::builder();
         schema_builder.add_text_field("field", STORED);
@@ -52,12 +54,18 @@ mod tests {
                     .set_fieldnorms(false),
             ),
         );
+        schema_builder.add_json_field(DYNAMIC_FIELD_NAME, TEXT);
+        schema_builder.add_json_field("json_not_indexed", STORED);
         schema_builder.build()
     });
 
     pub static FIELD: Lazy<Field> = Lazy::new(|| SCHEMA.get_field("field").unwrap());
     pub static TXT_FIELD: Lazy<Field> = Lazy::new(|| SCHEMA.get_field("txt_field").unwrap());
     pub static STR_FIELD: Lazy<Field> = Lazy::new(|| SCHEMA.get_field("str_field").unwrap());
+    pub static JSON_FIELD: Lazy<Field> =
+        Lazy::new(|| SCHEMA.get_field(DYNAMIC_FIELD_NAME).unwrap());
+    pub static JSON_NOT_INDEXED_FIELD: Lazy<Field> =
+        Lazy::new(|| SCHEMA.get_field("json_not_indexed").unwrap());
 
     #[test]
     #[should_panic(expected = "Cannot register a given fieldnorm twice")]
@@ -90,6 +98,57 @@ mod tests {
             assert_eq!(fieldnorm_reader.fieldnorm(1u32), 0u32);
             assert_eq!(fieldnorm_reader.fieldnorm(2u32), 5u32);
             assert_eq!(fieldnorm_reader.fieldnorm(3u32), 3u32);
+        }
+        Ok(())
+    }
+
+    #[test]
+    pub fn test_json_fieldnorm() -> crate::Result<()> {
+        let path = Path::new("test");
+        let directory: RamDirectory = RamDirectory::create();
+        {
+            let write: WritePtr = directory.open_write(Path::new("test"))?;
+            let serializer = FieldNormsSerializer::from_write(write)?;
+            let mut fieldnorm_writers = FieldNormsWriter::for_schema(&SCHEMA);
+            fieldnorm_writers.record_json(1u32, *JSON_FIELD, "title", 4); // Vega ran by ducks
+            fieldnorm_writers.record_json(1u32, *JSON_FIELD, "body", 1); // Quack
+            fieldnorm_writers.record_json(2u32, *JSON_FIELD, "question", 5); // Who let the ducks code?
+            fieldnorm_writers.fill_up_to_max_doc(3u32);
+            fieldnorm_writers.serialize(serializer)?;
+        }
+        let file = directory.open_read(path)?;
+        {
+            let fields_composite: CompositeFile<String> = CompositeFile::open(&file)?;
+            assert!(fields_composite
+                .open_read(*JSON_NOT_INDEXED_FIELD)
+                .is_none());
+            let title_fieldnorm_reader = FieldNormReader::open(
+                fields_composite
+                    .open_read_with_idx(*JSON_FIELD, "title".to_string())
+                    .unwrap(),
+            )?;
+            let body_fieldnorm_reader = FieldNormReader::open(
+                fields_composite
+                    .open_read_with_idx(*JSON_FIELD, "body".to_string())
+                    .unwrap(),
+            )?;
+            let question_fieldnorm_reader = FieldNormReader::open(
+                fields_composite
+                    .open_read_with_idx(*JSON_FIELD, "question".to_string())
+                    .unwrap(),
+            )?;
+
+            assert_eq!(title_fieldnorm_reader.fieldnorm(0u32), 0u32);
+            assert_eq!(body_fieldnorm_reader.fieldnorm(0u32), 0u32);
+            assert_eq!(question_fieldnorm_reader.fieldnorm(0u32), 0u32);
+
+            assert_eq!(title_fieldnorm_reader.fieldnorm(1u32), 4u32);
+            assert_eq!(body_fieldnorm_reader.fieldnorm(1u32), 1u32);
+            assert_eq!(question_fieldnorm_reader.fieldnorm(1u32), 0u32);
+
+            assert_eq!(title_fieldnorm_reader.fieldnorm(2u32), 0u32);
+            assert_eq!(body_fieldnorm_reader.fieldnorm(2u32), 0u32);
+            assert_eq!(question_fieldnorm_reader.fieldnorm(2u32), 5u32);
         }
         Ok(())
     }
