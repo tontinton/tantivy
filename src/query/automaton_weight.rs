@@ -56,7 +56,7 @@ where
         }
     }
 
-    /// Whether the beginning of the field must start with the term
+    /// Whether field's value must start with phrase prefix query.
     pub fn set_must_start(&mut self, must_start: bool) {
         self.must_start = must_start;
     }

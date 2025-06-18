@@ -132,7 +132,7 @@ impl RegexPhraseQuery {
         self.max_expansions = value;
     }
 
-    /// Whether the beginning of the field must start with phrase prefix query.
+    /// Whether field's value must start with phrase prefix query.
     pub fn set_must_start(&mut self, value: bool) {
         self.must_start = value;
     }
