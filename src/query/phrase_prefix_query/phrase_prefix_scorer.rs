@@ -131,11 +131,7 @@ impl<TPostings: Postings> PhrasePrefixScorer<TPostings> {
                 fieldnorm_reader,
                 0,
                 1,
-                if must_start {
-                    PhraseScorerFlags::MUST_START
-                } else {
-                    PhraseScorerFlags::default()
-                },
+                PhraseScorerFlags::default().with(PhraseScorerFlags::MUST_START, must_start),
             ))
         } else {
             let (pos, postings) = term_postings
