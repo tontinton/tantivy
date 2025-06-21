@@ -33,7 +33,8 @@ impl SegmentSerializer {
         let fast_field_write = segment.open_write(SegmentComponent::FastFields)?;
 
         let fieldnorms_write = segment.open_write(SegmentComponent::FieldNorms)?;
-        let fieldnorms_serializer = FieldNormsSerializer::from_write(fieldnorms_write)?;
+        let fieldnorms_serializer =
+            FieldNormsSerializer::from_write(fieldnorms_write, settings.fieldnorms_compression)?;
 
         let postings_serializer = InvertedIndexSerializer::open(&mut segment)?;
         Ok(SegmentSerializer {

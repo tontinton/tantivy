@@ -17,6 +17,7 @@
 //!
 //! This trick is used by the Bm25 similarity.
 mod code;
+mod compression;
 mod reader;
 mod serializer;
 mod writer;
@@ -38,6 +39,7 @@ mod tests {
     use crate::schema::{
         Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, STORED, TEXT,
     };
+    use crate::store::Compressor;
     use crate::{Index, Term, TERMINATED};
 
     pub const DYNAMIC_FIELD_NAME: &str = "_dynamic";
@@ -81,7 +83,7 @@ mod tests {
         let directory: RamDirectory = RamDirectory::create();
         {
             let write: WritePtr = directory.open_write(Path::new("test"))?;
-            let serializer = FieldNormsSerializer::from_write(write)?;
+            let serializer = FieldNormsSerializer::from_write(write, Compressor::None)?;
             let mut fieldnorm_writers = FieldNormsWriter::for_schema(&SCHEMA);
             fieldnorm_writers.record(2u32, *TXT_FIELD, 5);
             fieldnorm_writers.record(3u32, *TXT_FIELD, 3);
@@ -108,7 +110,7 @@ mod tests {
         let directory: RamDirectory = RamDirectory::create();
         {
             let write: WritePtr = directory.open_write(Path::new("test"))?;
-            let serializer = FieldNormsSerializer::from_write(write)?;
+            let serializer = FieldNormsSerializer::from_write(write, Compressor::None)?;
             let mut fieldnorm_writers = FieldNormsWriter::for_schema(&SCHEMA);
             fieldnorm_writers.record_json(1u32, *JSON_FIELD, "title", 4); // Vega ran by ducks
             fieldnorm_writers.record_json(1u32, *JSON_FIELD, "body", 1); // Quack

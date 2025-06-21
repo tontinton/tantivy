@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::compression::decompress_fieldnorms;
 use super::{fieldnorm_to_id, id_to_fieldnorm};
 use crate::directory::{CompositeFile, FileSlice, OwnedBytes};
 use crate::schema::Field;
@@ -116,8 +117,9 @@ impl FieldNormReader {
 
     /// Opens a field norm reader given its file.
     pub fn open(fieldnorm_file: FileSlice) -> crate::Result<Self> {
-        let data = fieldnorm_file.read_bytes()?;
-        Ok(FieldNormReader::new(data))
+        let compressed = fieldnorm_file.read_bytes()?;
+        let data = decompress_fieldnorms(compressed.as_slice())?;
+        Ok(FieldNormReader::new(OwnedBytes::new(data)))
     }
 
     fn new(data: OwnedBytes) -> Self {
