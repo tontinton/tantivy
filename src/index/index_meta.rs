@@ -259,6 +259,9 @@ pub struct IndexSettings {
     #[serde(default = "default_docstore_blocksize")]
     /// The size of each block that will be compressed and written to disk
     pub docstore_blocksize: usize,
+    /// The `Compressor` used to compress the field norms.
+    #[serde(default)]
+    pub fieldnorms_compression: Compressor,
 }
 
 /// Must be a function to be compatible with serde defaults
@@ -272,6 +275,7 @@ impl Default for IndexSettings {
             docstore_compression: Compressor::default(),
             docstore_blocksize: default_docstore_blocksize(),
             docstore_compress_dedicated_thread: true,
+            fieldnorms_compression: Compressor::default(),
         }
     }
 }
@@ -413,7 +417,7 @@ mod tests {
         let json = serde_json::ser::to_string(&index_metas).expect("serialization failed");
         assert_eq!(
             json,
-            r#"{"index_settings":{"docstore_compression":"lz4","docstore_blocksize":16384},"segments":[],"schema":[{"name":"text","type":"text","options":{"indexing":{"record":"position","fieldnorms":true,"tokenizer":"default"},"stored":false,"fast":false}}],"opstamp":0}"#
+            r#"{"index_settings":{"docstore_compression":"lz4","docstore_blocksize":16384,"fieldnorms_compression":"lz4"},"segments":[],"schema":[{"name":"text","type":"text","options":{"indexing":{"record":"position","fieldnorms":true,"tokenizer":"default"},"stored":false,"fast":false}}],"opstamp":0}"#
         );
 
         let deser_meta: UntrackedIndexMeta = serde_json::from_str(&json).unwrap();
@@ -432,6 +436,7 @@ mod tests {
         };
         let index_metas = IndexMeta {
             index_settings: IndexSettings {
+                fieldnorms_compression: Compressor::None,
                 docstore_compression: crate::store::Compressor::Zstd(ZstdCompressor {
                     compression_level: Some(4),
                 }),
@@ -446,7 +451,7 @@ mod tests {
         let json = serde_json::ser::to_string(&index_metas).expect("serialization failed");
         assert_eq!(
             json,
-            r#"{"index_settings":{"docstore_compression":"zstd(compression_level=4)","docstore_blocksize":1000000},"segments":[],"schema":[{"name":"text","type":"text","options":{"indexing":{"record":"position","fieldnorms":true,"tokenizer":"default"},"stored":false,"fast":false}}],"opstamp":0}"#
+            r#"{"index_settings":{"docstore_compression":"zstd(compression_level=4)","docstore_blocksize":1000000,"fieldnorms_compression":"none"},"segments":[],"schema":[{"name":"text","type":"text","options":{"indexing":{"record":"position","fieldnorms":true,"tokenizer":"default"},"stored":false,"fast":false}}],"opstamp":0}"#
         );
 
         let deser_meta: UntrackedIndexMeta = serde_json::from_str(&json).unwrap();
@@ -500,7 +505,8 @@ mod tests {
             IndexSettings {
                 docstore_compression: Compressor::default(),
                 docstore_compress_dedicated_thread: true,
-                docstore_blocksize: 16_384
+                docstore_blocksize: 16_384,
+                fieldnorms_compression: Compressor::default(),
             }
         );
         {
@@ -509,7 +515,8 @@ mod tests {
                 index_settings_json,
                 serde_json::json!({
                     "docstore_compression": "lz4",
-                    "docstore_blocksize": 16384
+                    "docstore_blocksize": 16384,
+                    "fieldnorms_compression": "lz4",
                 })
             );
             let index_settings_deser: IndexSettings =
@@ -525,6 +532,7 @@ mod tests {
                     "docstore_compression": "lz4",
                     "docstore_blocksize": 16384,
                     "docstore_compress_dedicated_thread": false,
+                    "fieldnorms_compression": "lz4",
                 })
             );
             let index_settings_deser: IndexSettings =
