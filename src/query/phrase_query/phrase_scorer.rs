@@ -47,6 +47,7 @@ bitflags::bitflags! {
     pub struct PhraseScorerFlags: u8 {
         const MUST_START = 0b0000_0001;
         const MUST_MATCH_FIELD_LENGTH = 0b0000_0010;
+        const MUST_END = 0b0000_0100;
     }
 }
 
@@ -503,7 +504,7 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
                 .flags
                 .contains(PhraseScorerFlags::MUST_MATCH_FIELD_LENGTH)
             {
-                // Note that `estimated_field_len = min(actual_field_num_terms 255)`
+                // Note that `estimated_field_len = min(actual_field_num_terms, 255)`
                 // so will match longer values that starts with the queried phrase
                 let estimated_field_len = self.fieldnorm_reader.fieldnorm(self.doc());
                 if estimated_field_len > self.num_terms as u32 {
@@ -564,6 +565,14 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
         self.intersection_docset
             .docset_mut_specialized(self.num_terms - 1)
             .positions(&mut self.right_positions);
+
+        if self.flags.contains(PhraseScorerFlags::MUST_END) {
+            // Note that `estimated_field_len = min(actual_field_num_terms, 255)`
+            // so any phrase matching beyond position 255 will be treated as a suffix match as well.
+            let estimated_field_len = self.fieldnorm_reader.fieldnorm(self.doc());
+            self.right_positions
+                .retain(|&pos| pos >= estimated_field_len - 1);
+        }
     }
 
     fn has_slop(&self) -> bool {
