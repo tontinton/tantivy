@@ -105,6 +105,59 @@ mod tests {
     }
 
     #[test]
+    pub fn test_fieldnorm_compression() -> crate::Result<()> {
+        let directory: RamDirectory = RamDirectory::create();
+        let path_with_compression = Path::new("test_compressed");
+        let path_without_compression = Path::new("test_uncompressed");
+        {
+            let serializer_with_compression = FieldNormsSerializer::from_write(
+                directory.open_write(path_with_compression)?,
+                Compressor::Lz4,
+            )?;
+            let serializer_without_compression = FieldNormsSerializer::from_write(
+                directory.open_write(path_without_compression)?,
+                Compressor::None,
+            )?;
+
+            let mut fieldnorm_writers = FieldNormsWriter::for_schema(&SCHEMA);
+            fieldnorm_writers.record(1u32, *TXT_FIELD, 5);
+            fieldnorm_writers.record(2u32, *TXT_FIELD, 3);
+            fieldnorm_writers.record_json(1u32, *JSON_FIELD, "title", 4); // Vega ran by ducks
+            fieldnorm_writers.record_json(1u32, *JSON_FIELD, "body", 1); // Quack
+            fieldnorm_writers.record_json(2u32, *JSON_FIELD, "question", 5); // Who let the ducks code?
+            fieldnorm_writers.fill_up_to_max_doc(3u32);
+
+            fieldnorm_writers.serialize(serializer_with_compression)?;
+            let uncompressed_fieldnorms_size = directory.total_mem_usage();
+            fieldnorm_writers.serialize(serializer_without_compression)?;
+            let compressed_fieldnorms_size =
+                directory.total_mem_usage() - uncompressed_fieldnorms_size;
+            assert!(compressed_fieldnorms_size < uncompressed_fieldnorms_size);
+        }
+
+        let file = directory.open_read(path_with_compression)?;
+        {
+            let fields_composite: CompositeFile<String> = CompositeFile::open(&file)?;
+            let json_title_fieldnorm_reader = FieldNormReader::open(
+                fields_composite
+                    .open_read_with_idx(*JSON_FIELD, "title".to_string())
+                    .unwrap(),
+            )?;
+            let text_fieldnorm_reader =
+                FieldNormReader::open(fields_composite.open_read(*TXT_FIELD).unwrap())?;
+
+            assert_eq!(text_fieldnorm_reader.fieldnorm(0u32), 0u32);
+            assert_eq!(text_fieldnorm_reader.fieldnorm(1u32), 5u32);
+            assert_eq!(text_fieldnorm_reader.fieldnorm(2u32), 3u32);
+
+            assert_eq!(json_title_fieldnorm_reader.fieldnorm(0u32), 0u32);
+            assert_eq!(json_title_fieldnorm_reader.fieldnorm(1u32), 4u32);
+            assert_eq!(json_title_fieldnorm_reader.fieldnorm(2u32), 0u32);
+        }
+        Ok(())
+    }
+
+    #[test]
     pub fn test_json_fieldnorm() -> crate::Result<()> {
         let path = Path::new("test");
         let directory: RamDirectory = RamDirectory::create();
