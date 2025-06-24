@@ -228,7 +228,7 @@ pub use crate::indexer::{IndexWriter, SingleSegmentIndexWriter};
 pub use crate::schema::{Document, TantivyDocument, Term};
 
 /// Index format version.
-pub const INDEX_FORMAT_VERSION: u32 = 7;
+pub const INDEX_FORMAT_VERSION: u32 = 8;
 /// Oldest index format version this tantivy version can read.
 pub const INDEX_FORMAT_OLDEST_SUPPORTED_VERSION: u32 = 4;
 
