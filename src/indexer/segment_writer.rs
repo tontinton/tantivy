@@ -402,10 +402,10 @@ fn remap_and_write(
     if let Some(fieldnorms_serializer) = serializer.extract_fieldnorms_serializer() {
         fieldnorms_writer.serialize(fieldnorms_serializer)?;
     }
-    let fieldnorm_data = serializer
+    let (fieldnorm_data, version) = serializer
         .segment()
-        .open_read(SegmentComponent::FieldNorms)?;
-    let fieldnorm_readers = FieldNormReaders::open(fieldnorm_data)?;
+        .open_read_with_version(SegmentComponent::FieldNorms)?;
+    let fieldnorm_readers = FieldNormReaders::open(fieldnorm_data, version.index_format_version)?;
     serialize_postings(
         ctx,
         schema,

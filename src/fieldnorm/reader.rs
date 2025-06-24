@@ -16,21 +16,27 @@ use crate::{DocId, Term};
 #[derive(Clone)]
 pub struct FieldNormReaders {
     data: Arc<CompositeFile<String>>,
+    index_format_version: u32,
 }
 
 impl FieldNormReaders {
     /// Creates a field norm reader.
-    pub fn open(file: FileSlice) -> crate::Result<FieldNormReaders> {
+    pub fn open(file: FileSlice, index_format_version: u32) -> crate::Result<FieldNormReaders> {
         let data: CompositeFile<String> = CompositeFile::open(&file)?;
         Ok(FieldNormReaders {
             data: Arc::new(data),
+            index_format_version,
         })
+    }
+
+    fn has_compression_header(&self) -> bool {
+        self.index_format_version >= 8
     }
 
     /// Returns the FieldNormReader for a specific field.
     pub fn get_field(&self, field: Field) -> crate::Result<Option<FieldNormReader>> {
         if let Some(file) = self.data.open_read(field) {
-            let fieldnorm_reader = FieldNormReader::open(file)?;
+            let fieldnorm_reader = FieldNormReader::open(file, self.has_compression_header())?;
             Ok(Some(fieldnorm_reader))
         } else {
             Ok(None)
@@ -44,7 +50,7 @@ impl FieldNormReaders {
         json_path: String,
     ) -> crate::Result<Option<FieldNormReader>> {
         if let Some(file) = self.data.open_read_with_idx(field, json_path) {
-            let fieldnorm_reader = FieldNormReader::open(file)?;
+            let fieldnorm_reader = FieldNormReader::open(file, self.has_compression_header())?;
             Ok(Some(fieldnorm_reader))
         } else {
             Ok(None)
@@ -116,10 +122,14 @@ impl FieldNormReader {
     }
 
     /// Opens a field norm reader given its file.
-    pub fn open(fieldnorm_file: FileSlice) -> crate::Result<Self> {
-        let compressed = fieldnorm_file.read_bytes()?;
-        let data = decompress_fieldnorms(compressed.as_slice())?;
-        Ok(FieldNormReader::new(OwnedBytes::new(data)))
+    pub fn open(fieldnorm_file: FileSlice, has_compression_header: bool) -> crate::Result<Self> {
+        let data = fieldnorm_file.read_bytes()?;
+        if has_compression_header {
+            let decompressed = decompress_fieldnorms(data.as_slice())?;
+            Ok(FieldNormReader::new(OwnedBytes::new(decompressed)))
+        } else {
+            Ok(FieldNormReader::new(data))
+        }
     }
 
     fn new(data: OwnedBytes) -> Self {

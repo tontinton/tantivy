@@ -212,8 +212,10 @@ impl SegmentReader {
 
         let fast_fields_data = segment.open_read(SegmentComponent::FastFields)?;
         let fast_fields_readers = FastFieldReaders::open(fast_fields_data, schema.clone())?;
-        let fieldnorm_data = segment.open_read(SegmentComponent::FieldNorms)?;
-        let fieldnorm_readers = FieldNormReaders::open(fieldnorm_data)?;
+        let (fieldnorm_data, version) =
+            segment.open_read_with_version(SegmentComponent::FieldNorms)?;
+        let fieldnorm_readers =
+            FieldNormReaders::open(fieldnorm_data, version.index_format_version)?;
 
         let original_bitset = if segment.meta().has_deletes() {
             let alive_doc_file_slice = segment.open_read(SegmentComponent::Delete)?;

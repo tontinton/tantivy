@@ -42,6 +42,7 @@ mod tests {
     use crate::store::Compressor;
     use crate::{Index, Term, TERMINATED};
 
+    pub const HAS_COMPRESSION_HEADER: bool = true;
     pub const DYNAMIC_FIELD_NAME: &str = "_dynamic";
 
     pub static SCHEMA: Lazy<Schema> = Lazy::new(|| {
@@ -95,7 +96,7 @@ mod tests {
             assert!(fields_composite.open_read(*FIELD).is_none());
             assert!(fields_composite.open_read(*STR_FIELD).is_none());
             let data = fields_composite.open_read(*TXT_FIELD).unwrap();
-            let fieldnorm_reader = FieldNormReader::open(data)?;
+            let fieldnorm_reader = FieldNormReader::open(data, HAS_COMPRESSION_HEADER)?;
             assert_eq!(fieldnorm_reader.fieldnorm(0u32), 0u32);
             assert_eq!(fieldnorm_reader.fieldnorm(1u32), 0u32);
             assert_eq!(fieldnorm_reader.fieldnorm(2u32), 5u32);
@@ -142,9 +143,12 @@ mod tests {
                 fields_composite
                     .open_read_with_idx(*JSON_FIELD, "title".to_string())
                     .unwrap(),
+                HAS_COMPRESSION_HEADER,
             )?;
-            let text_fieldnorm_reader =
-                FieldNormReader::open(fields_composite.open_read(*TXT_FIELD).unwrap())?;
+            let text_fieldnorm_reader = FieldNormReader::open(
+                fields_composite.open_read(*TXT_FIELD).unwrap(),
+                HAS_COMPRESSION_HEADER,
+            )?;
 
             assert_eq!(text_fieldnorm_reader.fieldnorm(0u32), 0u32);
             assert_eq!(text_fieldnorm_reader.fieldnorm(1u32), 5u32);
@@ -181,16 +185,19 @@ mod tests {
                 fields_composite
                     .open_read_with_idx(*JSON_FIELD, "title".to_string())
                     .unwrap(),
+                HAS_COMPRESSION_HEADER,
             )?;
             let body_fieldnorm_reader = FieldNormReader::open(
                 fields_composite
                     .open_read_with_idx(*JSON_FIELD, "body".to_string())
                     .unwrap(),
+                HAS_COMPRESSION_HEADER,
             )?;
             let question_fieldnorm_reader = FieldNormReader::open(
                 fields_composite
                     .open_read_with_idx(*JSON_FIELD, "question".to_string())
                     .unwrap(),
+                HAS_COMPRESSION_HEADER,
             )?;
 
             assert_eq!(title_fieldnorm_reader.fieldnorm(0u32), 0u32);

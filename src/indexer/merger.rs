@@ -572,10 +572,11 @@ impl IndexMerger {
             self.write_fieldnorms(fieldnorms_serializer, &doc_id_mapping)?;
         }
         debug!("write-postings");
-        let fieldnorm_data = serializer
+        let (fieldnorm_data, version) = serializer
             .segment()
-            .open_read(SegmentComponent::FieldNorms)?;
-        let fieldnorm_readers = FieldNormReaders::open(fieldnorm_data)?;
+            .open_read_with_version(SegmentComponent::FieldNorms)?;
+        let fieldnorm_readers =
+            FieldNormReaders::open(fieldnorm_data, version.index_format_version)?;
         self.write_postings(
             serializer.get_postings_serializer(),
             fieldnorm_readers,
