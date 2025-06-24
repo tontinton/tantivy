@@ -6,7 +6,7 @@ use crate::directory::error::{OpenReadError, OpenWriteError};
 use crate::directory::{Directory, FileSlice, WritePtr};
 use crate::index::{Index, SegmentId, SegmentMeta};
 use crate::schema::Schema;
-use crate::Opstamp;
+use crate::{Opstamp, Version};
 
 /// A segment is a piece of the index.
 #[derive(Clone)]
@@ -79,6 +79,15 @@ impl Segment {
     pub fn open_read(&self, component: SegmentComponent) -> Result<FileSlice, OpenReadError> {
         let path = self.relative_path(component);
         self.index.directory().open_read(&path)
+    }
+
+    /// Open one of the component file for a *regular* read.
+    pub fn open_read_with_version(
+        &self,
+        component: SegmentComponent,
+    ) -> Result<(FileSlice, Version), OpenReadError> {
+        let path = self.relative_path(component);
+        self.index.directory().open_read_with_version(&path)
     }
 
     /// Open one of the component file for *regular* write.

@@ -14,7 +14,7 @@ use crate::directory::{
     WatchHandle, WritePtr, META_LOCK,
 };
 use crate::error::DataCorruption;
-use crate::Directory;
+use crate::{Directory, Version};
 
 /// Returns true if the file is "managed".
 /// Non-managed file are not subject to garbage collection.
@@ -266,6 +266,18 @@ impl ManagedDirectory {
             .clone();
         managed_paths
     }
+
+    /// Open a file for reading and return the file slice and the version of the index.
+    pub fn open_read_with_version(
+        &self,
+        path: &Path,
+    ) -> result::Result<(FileSlice, Version), OpenReadError> {
+        let file_slice: FileSlice = self.directory.open_read(path)?;
+        let (footer, reader) = Footer::extract_footer(file_slice)
+            .map_err(|io_error| OpenReadError::wrap_io_error(io_error, path.to_path_buf()))?;
+        footer.is_compatible()?;
+        Ok((reader, footer.version))
+    }
 }
 
 impl Directory for ManagedDirectory {
@@ -275,10 +287,7 @@ impl Directory for ManagedDirectory {
     }
 
     fn open_read(&self, path: &Path) -> result::Result<FileSlice, OpenReadError> {
-        let file_slice = self.directory.open_read(path)?;
-        let (footer, reader) = Footer::extract_footer(file_slice)
-            .map_err(|io_error| OpenReadError::wrap_io_error(io_error, path.to_path_buf()))?;
-        footer.is_compatible()?;
+        let (reader, _version) = self.open_read_with_version(path)?;
         Ok(reader)
     }
 
