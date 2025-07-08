@@ -57,7 +57,8 @@ pub fn compress_and_write_fieldnorms(
 pub fn decompress_fieldnorms(data: &[u8]) -> crate::Result<Vec<u8>> {
     let mut reader = std::io::Cursor::new(data);
     let header = FieldNormsHeader::deserialize(&mut reader)?;
-    let compressed_data = &data[9..9 + header.compressed_size as usize];
+    let data_start = reader.position() as usize;
+    let compressed_data = &data[data_start..data_start + header.compressed_size as usize];
     let decompressor = Decompressor::from_id(header.decompressor_id);
     Ok(decompressor.decompress(compressed_data)?)
 }
