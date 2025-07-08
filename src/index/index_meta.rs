@@ -468,7 +468,7 @@ mod tests {
         let err = serde_json::from_str::<UntrackedIndexMeta>(json).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "unknown variant `zsstd`, expected one of `none`, `lz4`, `zstd`, \
+            "unknown variant `zsstd`, expected one of `none`, `rle`, `lz4`, `zstd`, \
              `zstd(compression_level=5)` at line 1 column 49"
                 .to_string()
         );

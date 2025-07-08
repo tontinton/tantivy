@@ -9,6 +9,8 @@ use super::Compressor;
 pub enum Decompressor {
     /// No compression
     None,
+    /// Relative length encoding [length:u16][byte:u8].
+    Rle,
     /// Use the lz4 decompressor (block format)
     #[cfg(feature = "lz4-compression")]
     Lz4,
@@ -21,6 +23,7 @@ impl From<Compressor> for Decompressor {
     fn from(compressor: Compressor) -> Self {
         match compressor {
             Compressor::None => Decompressor::None,
+            Compressor::Rle => Decompressor::Rle,
             #[cfg(feature = "lz4-compression")]
             Compressor::Lz4 => Decompressor::Lz4,
             #[cfg(feature = "zstd-compression")]
@@ -37,6 +40,7 @@ impl Decompressor {
             1 => Decompressor::Lz4,
             #[cfg(feature = "zstd-compression")]
             4 => Decompressor::Zstd,
+            5 => Decompressor::Rle,
             _ => panic!("unknown compressor id {id:?}"),
         }
     }
@@ -48,6 +52,7 @@ impl Decompressor {
             Self::Lz4 => 1,
             #[cfg(feature = "zstd-compression")]
             Self::Zstd => 4,
+            Decompressor::Rle => 5,
         }
     }
 
@@ -69,6 +74,7 @@ impl Decompressor {
                 decompressed.extend_from_slice(compressed);
                 Ok(())
             }
+            Self::Rle => super::compression_rle_block::decompress(compressed, decompressed),
             #[cfg(feature = "lz4-compression")]
             Self::Lz4 => super::compression_lz4_block::decompress(compressed, decompressed),
             #[cfg(feature = "zstd-compression")]
@@ -84,6 +90,7 @@ mod tests {
     #[test]
     fn compressor_decompressor_id_test() {
         assert_eq!(Decompressor::from(Compressor::None), Decompressor::None);
+        assert_eq!(Decompressor::from(Compressor::Rle), Decompressor::Rle);
         #[cfg(feature = "lz4-compression")]
         assert_eq!(Decompressor::from(Compressor::Lz4), Decompressor::Lz4);
         #[cfg(feature = "zstd-compression")]

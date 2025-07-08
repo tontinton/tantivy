@@ -10,6 +10,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub enum Compressor {
     /// No compression
     None,
+    /// Relative length encoding [length:u16][byte:u8].
+    Rle,
     /// Use the lz4 compressor (block format)
     #[cfg(feature = "lz4-compression")]
     Lz4,
@@ -23,6 +25,7 @@ impl Serialize for Compressor {
     where S: serde::Serializer {
         match *self {
             Compressor::None => serializer.serialize_str("none"),
+            Compressor::Rle => serializer.serialize_str("rle"),
             #[cfg(feature = "lz4-compression")]
             Compressor::Lz4 => serializer.serialize_str("lz4"),
             #[cfg(feature = "zstd-compression")]
@@ -37,6 +40,7 @@ impl<'de> Deserialize<'de> for Compressor {
         let buf = String::deserialize(deserializer)?;
         let compressor = match buf.as_str() {
             "none" => Compressor::None,
+            "rle" => Compressor::Rle,
             #[cfg(feature = "lz4-compression")]
             "lz4" => Compressor::Lz4,
             #[cfg(not(feature = "lz4-compression"))]
@@ -61,6 +65,7 @@ impl<'de> Deserialize<'de> for Compressor {
                     &buf,
                     &[
                         "none",
+                        "rle",
                         #[cfg(feature = "lz4-compression")]
                         "lz4",
                         #[cfg(feature = "zstd-compression")]
@@ -156,6 +161,7 @@ impl Compressor {
                 compressed.extend_from_slice(uncompressed);
                 Ok(())
             }
+            Self::Rle => super::compression_rle_block::compress(uncompressed, compressed),
             #[cfg(feature = "lz4-compression")]
             Self::Lz4 => super::compression_lz4_block::compress(uncompressed, compressed),
             #[cfg(feature = "zstd-compression")]

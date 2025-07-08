@@ -41,6 +41,7 @@ pub use self::decompressors::Decompressor;
 pub use self::reader::{CacheStats, StoreReader};
 pub(crate) use self::reader::{DocStoreVersion, DOCSTORE_CACHE_CAPACITY};
 pub use self::writer::StoreWriter;
+mod compression_rle_block;
 mod store_compressor;
 
 /// Doc store version in footer to handle format changes.
