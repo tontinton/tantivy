@@ -32,15 +32,18 @@ fn posting_writer_from_field_entry(field_entry: &FieldEntry) -> Box<dyn Postings
     match *field_entry.field_type() {
         FieldType::Str(ref text_options) => text_options
             .get_indexing_options()
-            .map(|indexing_options| match indexing_options.index_option() {
-                IndexRecordOption::Basic => {
-                    SpecializedPostingsWriter::<DocIdRecorder>::default().into()
-                }
-                IndexRecordOption::WithFreqs => {
-                    SpecializedPostingsWriter::<TermFrequencyRecorder>::default().into()
-                }
-                IndexRecordOption::WithFreqsAndPositions => {
-                    SpecializedPostingsWriter::<TfAndPositionRecorder>::default().into()
+            .map(|indexing_options| {
+                let reverse = indexing_options.suffix();
+                match indexing_options.index_option() {
+                    IndexRecordOption::Basic => {
+                        SpecializedPostingsWriter::<DocIdRecorder>::new(reverse).into()
+                    }
+                    IndexRecordOption::WithFreqs => {
+                        SpecializedPostingsWriter::<TermFrequencyRecorder>::new(reverse).into()
+                    }
+                    IndexRecordOption::WithFreqsAndPositions => {
+                        SpecializedPostingsWriter::<TfAndPositionRecorder>::new(reverse).into()
+                    }
                 }
             })
             .unwrap_or_else(|| SpecializedPostingsWriter::<DocIdRecorder>::default().into()),

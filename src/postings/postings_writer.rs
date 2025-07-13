@@ -168,6 +168,16 @@ pub(crate) trait PostingsWriter: Send + Sync {
 pub(crate) struct SpecializedPostingsWriter<Rec: Recorder> {
     total_num_tokens: u64,
     _recorder_type: PhantomData<Rec>,
+    reverse: bool,
+}
+
+impl<Rec: Recorder> SpecializedPostingsWriter<Rec> {
+    pub(crate) fn new(reverse: bool) -> Self {
+        Self {
+            reverse,
+            ..Default::default()
+        }
+    }
 }
 
 impl<Rec: Recorder> From<SpecializedPostingsWriter<Rec>> for Box<dyn PostingsWriter> {
@@ -228,9 +238,23 @@ impl<Rec: Recorder> PostingsWriter for SpecializedPostingsWriter<Rec> {
         serializer: &mut FieldSerializer,
     ) -> io::Result<()> {
         let mut buffer_lender = BufferLender::default();
+        let mut reversed = Vec::with_capacity(if self.reverse { term_addrs.len() } else { 0 });
+
         for (_field, _path_id, term, addr) in term_addrs {
             Self::serialize_one_term(term, *addr, &mut buffer_lender, ctx, serializer)?;
+            if self.reverse {
+                let rev: Vec<u8> = term.iter().rev().copied().collect();
+                reversed.push((rev, serializer.last_term_info().clone()));
+            }
         }
+
+        if self.reverse {
+            reversed.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+            for (term, term_info) in reversed {
+                serializer.insert_reversed_term(&term, &term_info)?;
+            }
+        }
+
         Ok(())
     }
 
