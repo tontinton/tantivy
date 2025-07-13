@@ -37,8 +37,25 @@ impl RevTermMerger {
         })
     }
 
-    /// Currently only supports json string fields.
-    pub fn push(&mut self, bytes: &[u8], info: TermInfo) -> io::Result<()> {
+    fn push(&mut self, rev: Vec<u8>, info: TermInfo) -> io::Result<()> {
+        let len = rev.len();
+        self.terms.push((rev, info));
+        self.tracked_size += len + size_of::<TermInfo>();
+        if self.tracked_size >= FLUSH_SIZE {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    pub fn push_str(&mut self, bytes: &[u8], info: TermInfo) -> io::Result<()> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        self.push(bytes.iter().rev().copied().collect(), info)?;
+        Ok(())
+    }
+
+    pub fn push_json_str(&mut self, bytes: &[u8], info: TermInfo) -> io::Result<()> {
         if bytes.is_empty() {
             return Ok(());
         }
@@ -56,12 +73,7 @@ impl RevTermMerger {
         rev.extend(prefix);
         rev.push(value[0]);
         rev.extend(value.iter().skip(1).rev().copied());
-        self.terms.push((rev, info));
-
-        self.tracked_size += bytes.len() + size_of::<TermInfo>();
-        if self.tracked_size >= FLUSH_SIZE {
-            self.flush()?;
-        }
+        self.push(rev, info)?;
 
         Ok(())
     }

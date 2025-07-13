@@ -145,6 +145,12 @@ fn extract_fast_field_required_columns(schema: &Schema) -> Vec<(String, ColumnTy
         .collect()
 }
 
+enum ReverseFieldType {
+    None,
+    Json,
+    Str,
+}
+
 impl IndexMerger {
     pub fn open(schema: Schema, segments: &[Segment]) -> crate::Result<IndexMerger> {
         let alive_bitset = segments.iter().map(|_| None).collect_vec();
@@ -391,6 +397,24 @@ impl IndexMerger {
                          indexed. Have you modified the schema?",
         );
 
+        let reverse_field_type = match field_entry.field_type() {
+            FieldType::Str(text_options)
+                if text_options
+                    .get_indexing_options()
+                    .is_some_and(|opts| opts.suffix()) =>
+            {
+                ReverseFieldType::Str
+            }
+            FieldType::JsonObject(json_options)
+                if json_options
+                    .get_text_indexing_options()
+                    .is_some_and(|opts| opts.suffix()) =>
+            {
+                ReverseFieldType::Json
+            }
+            _ => ReverseFieldType::None,
+        };
+
         let mut segment_postings_containing_the_term: Vec<(usize, SegmentPostings)> = vec![];
 
         while merged_terms.advance() {
@@ -496,8 +520,17 @@ impl IndexMerger {
             }
             // closing the term.
             field_serializer.close_term()?;
-            if field_entry.field_type().is_json() {
-                merged_revterms.push(term_bytes, field_serializer.last_term_info().clone())?;
+
+            match reverse_field_type {
+                ReverseFieldType::None => {}
+                ReverseFieldType::Json => {
+                    merged_revterms
+                        .push_json_str(term_bytes, field_serializer.last_term_info().clone())?;
+                }
+                ReverseFieldType::Str => {
+                    merged_revterms
+                        .push_str(term_bytes, field_serializer.last_term_info().clone())?;
+                }
             }
         }
         merged_revterms.merge(&mut field_serializer)?;
