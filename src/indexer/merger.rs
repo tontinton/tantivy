@@ -652,12 +652,13 @@ mod tests {
         IndexWriter, Searcher,
     };
 
-    #[test]
-    fn test_index_merger_no_deletes() -> crate::Result<()> {
+    fn test_index_merger_no_deletes_impl(suffix: bool) -> crate::Result<()> {
         let mut schema_builder = schema::Schema::builder();
         let text_fieldtype = schema::TextOptions::default()
             .set_indexing_options(
-                TextFieldIndexing::default().set_index_option(IndexRecordOption::WithFreqs),
+                TextFieldIndexing::default()
+                    .set_index_option(IndexRecordOption::WithFreqs)
+                    .set_suffix(suffix),
             )
             .set_stored();
         let text_field = schema_builder.add_text_field("text", text_fieldtype);
@@ -810,11 +811,22 @@ mod tests {
     }
 
     #[test]
-    fn test_index_merger_with_deletes() -> crate::Result<()> {
+    fn test_index_merger_no_deletes() -> crate::Result<()> {
+        test_index_merger_no_deletes_impl(false)
+    }
+
+    #[test]
+    fn test_index_merger_no_deletes_suffix() -> crate::Result<()> {
+        test_index_merger_no_deletes_impl(true)
+    }
+
+    fn test_index_merger_with_deletes_impl(suffix: bool) -> crate::Result<()> {
         let mut schema_builder = schema::Schema::builder();
         let text_fieldtype = schema::TextOptions::default()
             .set_indexing_options(
-                TextFieldIndexing::default().set_index_option(IndexRecordOption::WithFreqs),
+                TextFieldIndexing::default()
+                    .set_index_option(IndexRecordOption::WithFreqs)
+                    .set_suffix(suffix),
             )
             .set_stored();
         let text_field = schema_builder.add_text_field("text", text_fieldtype);
@@ -1115,6 +1127,16 @@ mod tests {
             assert_eq!(searcher.num_docs(), 0);
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_index_merger_with_deletes() -> crate::Result<()> {
+        test_index_merger_with_deletes_impl(false)
+    }
+
+    #[test]
+    fn test_index_merger_with_deletes_suffix() -> crate::Result<()> {
+        test_index_merger_with_deletes_impl(true)
     }
 
     #[test]
