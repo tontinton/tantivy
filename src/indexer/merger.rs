@@ -1140,6 +1140,332 @@ mod tests {
     }
 
     #[test]
+    fn test_index_merger_with_revterm_with_deletes() -> crate::Result<()> {
+        let mut schema_builder = schema::Schema::builder();
+        let text_fieldtype = schema::TextOptions::default()
+            .set_indexing_options(
+                TextFieldIndexing::default()
+                    .set_index_option(IndexRecordOption::WithFreqs)
+                    .set_suffix(true),
+            )
+            .set_stored();
+        let text_field = schema_builder.add_text_field("text", text_fieldtype);
+        let score_fieldtype = schema::NumericOptions::default().set_fast();
+        let score_field = schema_builder.add_u64_field("score", score_fieldtype);
+        let bytes_score_field = schema_builder.add_bytes_field("score_bytes", FAST);
+        let index = Index::create_in_ram(schema_builder.build());
+        let mut index_writer = index.writer_for_tests()?;
+        let reader = index.reader().unwrap();
+        let search_term = |searcher: &Searcher, term: Term| {
+            let collector = FastFieldTestCollector::for_field("score");
+            // let bytes_collector = BytesFastFieldTestCollector::for_field(bytes_score_field);
+
+            let rev_bytes = term
+                .serialized_value_bytes()
+                .iter()
+                .rev()
+                .copied()
+                .collect::<Vec<u8>>();
+            let revterm =
+                Term::from_field_text(term.field(), std::str::from_utf8(&rev_bytes).unwrap());
+            let revterm_query = TermQuery::new_reverse(revterm, IndexRecordOption::Basic);
+
+            let term_query = TermQuery::new(term, IndexRecordOption::Basic);
+            // searcher
+            //     .search(&term_query, &(collector, bytes_collector))
+            //     .map(|(scores, bytes)| {
+            //         let mut score_bytes = &bytes[..];
+            //         for &score in &scores {
+            //             assert_eq!(score as u32, score_bytes.read_u32::<BigEndian>().unwrap());
+            //         }
+            //         scores
+            //     })
+
+            // Validating that looking up revterms works as expected, even after merge.
+            let revterm_result = searcher.search(&revterm_query, &collector)?;
+            let term_result = searcher.search(&term_query, &collector)?;
+            assert_eq!(revterm_result, term_result);
+            Ok::<Vec<u64>, crate::TantivyError>(term_result)
+        };
+
+        let empty_vec = Vec::<u64>::new();
+        {
+            // a first commit
+            index_writer.add_document(doc!(
+                text_field => "ab bc de",
+                score_field => 1u64,
+                bytes_score_field => vec![0u8, 0, 0, 1],
+            ))?;
+            index_writer.add_document(doc!(
+                text_field => "bc cd",
+                score_field => 2u64,
+                bytes_score_field => vec![0u8, 0, 0, 2],
+            ))?;
+            index_writer.delete_term(Term::from_field_text(text_field, "cd"));
+            index_writer.add_document(doc!(
+                text_field => "cd de",
+                score_field => 3u64,
+                bytes_score_field => vec![0u8, 0, 0, 3],
+            ))?;
+            index_writer.commit()?;
+            reader.reload()?;
+            let searcher = reader.searcher();
+            assert_eq!(searcher.num_docs(), 2);
+            assert_eq!(searcher.segment_readers()[0].num_docs(), 2);
+            assert_eq!(searcher.segment_readers()[0].max_doc(), 3);
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "ab"))?,
+                vec![1]
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "bc"))?,
+                vec![1]
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "cd"))?,
+                vec![3]
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "de"))?,
+                vec![1, 3]
+            );
+        }
+        {
+            // a second commit
+            index_writer.add_document(doc!(
+                text_field => "ab de ef",
+                score_field => 4_000u64,
+                bytes_score_field => vec![0u8, 0, 0, 4],
+            ))?;
+            index_writer.add_document(doc!(
+                text_field => "ef fg",
+                score_field => 5_000u64,
+                bytes_score_field => vec![0u8, 0, 0, 5],
+            ))?;
+            index_writer.delete_term(Term::from_field_text(text_field, "ab"));
+            index_writer.delete_term(Term::from_field_text(text_field, "fg"));
+            index_writer.add_document(doc!(
+                text_field => "fg gh",
+                score_field => 6_000u64,
+                bytes_score_field => vec![0u8, 0, 23, 112],
+            ))?;
+            index_writer.add_document(doc!(
+                text_field => "gh hi",
+                score_field => 7_000u64,
+                bytes_score_field => vec![0u8, 0, 27, 88],
+            ))?;
+            index_writer.commit()?;
+            reader.reload()?;
+            let searcher = reader.searcher();
+
+            assert_eq!(searcher.segment_readers().len(), 2);
+            assert_eq!(searcher.num_docs(), 3);
+            assert_eq!(searcher.segment_readers()[0].num_docs(), 2);
+            assert_eq!(searcher.segment_readers()[0].max_doc(), 4);
+            assert_eq!(searcher.segment_readers()[1].num_docs(), 1);
+            assert_eq!(searcher.segment_readers()[1].max_doc(), 3);
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "ab"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "bc"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "cd"))?,
+                vec![3]
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "de"))?,
+                vec![3]
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "ef"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "fg"))?,
+                vec![6_000]
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "gh"))?,
+                vec![6_000, 7_000]
+            );
+
+            let score_field_reader = searcher
+                .segment_reader(0)
+                .fast_fields()
+                .u64("score")
+                .unwrap();
+            assert_eq!(score_field_reader.min_value(), 4000);
+            assert_eq!(score_field_reader.max_value(), 7000);
+
+            let score_field_reader = searcher
+                .segment_reader(1)
+                .fast_fields()
+                .u64("score")
+                .unwrap();
+            assert_eq!(score_field_reader.min_value(), 1);
+            assert_eq!(score_field_reader.max_value(), 3);
+        }
+        {
+            // merging the segments
+            let segment_ids = index.searchable_segment_ids()?;
+            index_writer.merge(&segment_ids).wait()?;
+            reader.reload()?;
+            let searcher = reader.searcher();
+            assert_eq!(searcher.segment_readers().len(), 1);
+            assert_eq!(searcher.num_docs(), 3);
+            assert_eq!(searcher.segment_readers()[0].num_docs(), 3);
+            assert_eq!(searcher.segment_readers()[0].max_doc(), 3);
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "ab"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "bc"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "cd"))?,
+                vec![3]
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "de"))?,
+                vec![3]
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "ef"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "fg"))?,
+                vec![6_000]
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "gh"))?,
+                vec![6_000, 7_000]
+            );
+            let score_field_reader = searcher
+                .segment_reader(0)
+                .fast_fields()
+                .u64("score")
+                .unwrap();
+            assert_eq!(score_field_reader.min_value(), 3);
+            assert_eq!(score_field_reader.max_value(), 7000);
+        }
+        {
+            // test a commit with only deletes
+            index_writer.delete_term(Term::from_field_text(text_field, "cd"));
+            index_writer.commit()?;
+
+            reader.reload()?;
+            let searcher = reader.searcher();
+            assert_eq!(searcher.segment_readers().len(), 1);
+            assert_eq!(searcher.num_docs(), 2);
+            assert_eq!(searcher.segment_readers()[0].num_docs(), 2);
+            assert_eq!(searcher.segment_readers()[0].max_doc(), 3);
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "ab"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "bc"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "cd"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "de"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "ef"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "fg"))?,
+                vec![6_000]
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "gh"))?,
+                vec![6_000, 7_000]
+            );
+            let score_field_reader = searcher
+                .segment_reader(0)
+                .fast_fields()
+                .u64("score")
+                .unwrap();
+            assert_eq!(score_field_reader.min_value(), 3);
+            assert_eq!(score_field_reader.max_value(), 7000);
+        }
+        {
+            // Test merging a single segment in order to remove deletes.
+            let segment_ids = index.searchable_segment_ids()?;
+            index_writer.merge(&segment_ids).wait()?;
+            reader.reload()?;
+
+            let searcher = reader.searcher();
+            assert_eq!(searcher.segment_readers().len(), 1);
+            assert_eq!(searcher.num_docs(), 2);
+            assert_eq!(searcher.segment_readers()[0].num_docs(), 2);
+            assert_eq!(searcher.segment_readers()[0].max_doc(), 2);
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "ab"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "bc"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "cd"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "de"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "ef"))?,
+                empty_vec
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "fg"))?,
+                vec![6_000]
+            );
+            assert_eq!(
+                search_term(&searcher, Term::from_field_text(text_field, "gh"))?,
+                vec![6_000, 7_000]
+            );
+            let score_field_reader = searcher
+                .segment_reader(0)
+                .fast_fields()
+                .u64("score")
+                .unwrap();
+            assert_eq!(score_field_reader.min_value(), 6000);
+            assert_eq!(score_field_reader.max_value(), 7000);
+        }
+
+        {
+            // Test removing all docs
+            index_writer.delete_term(Term::from_field_text(text_field, "gh"));
+            index_writer.commit()?;
+            let segment_ids = index.searchable_segment_ids()?;
+            reader.reload()?;
+
+            let searcher = reader.searcher();
+            assert!(segment_ids.is_empty());
+            assert!(searcher.segment_readers().is_empty());
+            assert_eq!(searcher.num_docs(), 0);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_merge_facets_sort_none() {
         test_merge_facets(None, true)
     }
