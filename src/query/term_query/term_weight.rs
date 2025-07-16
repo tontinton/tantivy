@@ -15,6 +15,7 @@ pub struct TermWeight {
     index_record_option: IndexRecordOption,
     similarity_weight: Bm25Weight,
     scoring_enabled: bool,
+    reverse: bool,
 }
 
 impl Weight for TermWeight {
@@ -97,12 +98,14 @@ impl TermWeight {
         index_record_option: IndexRecordOption,
         similarity_weight: Bm25Weight,
         scoring_enabled: bool,
+        reverse: bool,
     ) -> TermWeight {
         TermWeight {
             term,
             index_record_option,
             similarity_weight,
             scoring_enabled,
+            reverse,
         }
     }
 
@@ -125,8 +128,11 @@ impl TermWeight {
         let fieldnorm_reader =
             fieldnorm_reader_opt.unwrap_or_else(|| FieldNormReader::constant(reader.max_doc(), 1));
         let similarity_weight = self.similarity_weight.boost_by(boost);
-        let postings_opt: Option<SegmentPostings> =
-            inverted_index.read_postings(&self.term, self.index_record_option)?;
+        let postings_opt: Option<SegmentPostings> = if self.reverse {
+            inverted_index.read_postings_from_revterm(&self.term, self.index_record_option)?
+        } else {
+            inverted_index.read_postings(&self.term, self.index_record_option)?
+        };
         if let Some(segment_postings) = postings_opt {
             Ok(TermScorer::new(
                 segment_postings,

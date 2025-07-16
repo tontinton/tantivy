@@ -58,6 +58,7 @@ use crate::Term;
 pub struct TermQuery {
     term: Term,
     index_record_option: IndexRecordOption,
+    reverse: bool,
 }
 
 impl fmt::Debug for TermQuery {
@@ -72,6 +73,16 @@ impl TermQuery {
         TermQuery {
             term,
             index_record_option: segment_postings_options,
+            reverse: false,
+        }
+    }
+
+    /// Creates a new revterm query.
+    pub fn new_reverse(term: Term, segment_postings_options: IndexRecordOption) -> TermQuery {
+        TermQuery {
+            term,
+            index_record_option: segment_postings_options,
+            reverse: true,
         }
     }
 
@@ -116,6 +127,7 @@ impl TermQuery {
             index_record_option,
             bm25_weight,
             scoring_enabled,
+            self.reverse,
         ))
     }
 }
