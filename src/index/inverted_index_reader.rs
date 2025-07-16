@@ -73,6 +73,14 @@ impl InvertedIndexReader {
         self.termdict.get(term.serialized_value_bytes())
     }
 
+    /// Returns the term info associated with the term by looking up the revterm dict.
+    pub fn get_term_info_from_revterm(&self, term: &Term) -> io::Result<Option<TermInfo>> {
+        let dict = self
+            .revterms()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "revterm file doesn't exist"))?;
+        Ok(dict.get(term.serialized_value_bytes())?)
+    }
+
     /// Return the term dictionary datastructure.
     pub fn terms(&self) -> &TermDictionary {
         &self.termdict
@@ -223,6 +231,17 @@ impl InvertedIndexReader {
         option: IndexRecordOption,
     ) -> io::Result<Option<SegmentPostings>> {
         self.get_term_info(term)?
+            .map(move |term_info| self.read_postings_from_terminfo(&term_info, option))
+            .transpose()
+    }
+
+    /// Same as read_postings but uses the revterm dict instead of term dict.
+    pub fn read_postings_from_revterm(
+        &self,
+        term: &Term,
+        option: IndexRecordOption,
+    ) -> io::Result<Option<SegmentPostings>> {
+        self.get_term_info_from_revterm(term)?
             .map(move |term_info| self.read_postings_from_terminfo(&term_info, option))
             .transpose()
     }
