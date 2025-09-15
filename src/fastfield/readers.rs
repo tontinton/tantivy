@@ -266,6 +266,20 @@ impl FastFieldReaders {
         Ok(dynamic_column_handles)
     }
 
+    // Returns true if there is any dynamic subpath column handle for the given root path.
+    pub fn any_dynamic_subpath(&self, root_path: &str) -> crate::Result<bool> {
+        let Some(resolved_field_name) = self.resolve_field(root_path)? else {
+            return Ok(false);
+        };
+        let any_dynamic_subpath = self
+            .columnar
+            .read_subpath_columns(&resolved_field_name)?
+            .into_iter()
+            .next()
+            .is_some();
+        Ok(any_dynamic_subpath)
+    }
+
     #[doc(hidden)]
     pub async fn list_dynamic_column_handles(
         &self,
