@@ -56,7 +56,7 @@ pub fn should_log<F: Fn() -> Instant>(
     now: F,
 ) -> bool {
     //  count_atomic is treated as 2 u32: upper bits count "generation", lower bits count number of
-    //  calls since LAST_RESET. We assume there won't be 2**32 calls to this log in ~60s.
+    //  calls since LAST_RESET. We assume there won't be 2**32 calls to this log in ~1s.
     //  Generation is free to wrap around.
 
     // Because the lower 32 bits are storing the log count, we can
@@ -79,7 +79,7 @@ pub fn should_log<F: Fn() -> Instant>(
     let current_time = Duration::from_ticks(now().as_ticks());
     let last_reset = Duration::from_ticks(last_reset_atomic.load(Ordering::Acquire));
 
-    let should_reset = current_time.abs_diff(last_reset) >= Duration::from_secs(60);
+    let should_reset = current_time.abs_diff(last_reset) >= Duration::from_secs(1);
 
     if !should_reset {
         // we are over-limit and not far enough in time to reset: don't log
@@ -115,7 +115,7 @@ pub fn should_log<F: Fn() -> Instant>(
         });
     let can_log = update_res.is_ok();
 
-    // technically there is a race condition if we stay stuck *here* for > 60s, which
+    // technically there is a race condition if we stay stuck *here* for > 1s, which
     // could cause us to log more than required. This is unlikely to happen, and not
     // really a big issue.
 
@@ -128,7 +128,7 @@ pub fn should_log<F: Fn() -> Instant>(
 
 #[macro_export]
 macro_rules! rate_limited_tracing {
-    ($log_fn:ident, limit_per_min=$limit:literal, $($args:tt)*) => {{
+    ($log_fn:ident, limit_per_sec=$limit:literal, $($args:tt)*) => {{
         use ::std::sync::atomic::AtomicU64;
         use $crate::rate_limited_tracing::CoarsetimeInstant;
 
@@ -174,7 +174,7 @@ macro_rules! rate_limited_error {
 }
 
 fn _check_macro_works() {
-    rate_limited_info!(limit_per_min = 10, "test {}", "test");
+    rate_limited_info!(limit_per_sec = 10, "test {}", "test");
 }
 
 #[doc(hidden)]
@@ -204,7 +204,7 @@ mod tests {
         let limit = 5u64;
 
         let mut simulated_time = Instant::now();
-        let simulation_step = Duration::from_secs(1);
+        let simulation_step = Duration::from_millis(10);
 
         assert!(should_log(&count, &last_reset, limit as _, || {
             simulated_time
@@ -236,7 +236,7 @@ mod tests {
         }
 
         // advance enough to reset counter
-        simulated_time += simulation_step * 60;
+        simulated_time += Duration::from_secs(1);
 
         assert!(should_log(&count, &last_reset, limit as _, || {
             simulated_time
