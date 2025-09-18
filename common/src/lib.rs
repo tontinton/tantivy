@@ -11,6 +11,7 @@ mod datetime;
 pub mod file_slice;
 mod group_by;
 pub mod json_path_writer;
+pub mod rate_limited_tracing;
 mod serialize;
 mod vint;
 mod writer;
