@@ -1,3 +1,5 @@
+use common::rate_limited_warn;
+
 use crate::query::explanation::does_not_match;
 use crate::query::{EnableScoring, ExistsQuery, Explanation, Query, TermQuery, Weight};
 use crate::schema::{Field, IndexRecordOption, Type};
@@ -69,9 +71,19 @@ impl Weight for JsonExistsWeight {
             let is_intermediate = fast_field_reader.any_dynamic_subpath(&self.full_path)?;
             if is_intermediate {
                 // term query on _field_presence_json.
+                rate_limited_warn!(
+                    limit_per_sec = 1,
+                    "JsonExistsWeight: use term weight; search path: {}",
+                    self.full_path
+                );
                 return self.term_weight.scorer(reader, boost);
             }
         }
+        rate_limited_warn!(
+            limit_per_sec = 1,
+            "JsonExistsWeight: fallback to ExistsQuery; search path: {}",
+            self.full_path
+        );
         self.fallback_exists_weight.scorer(reader, boost)
     }
 
