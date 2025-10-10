@@ -16,6 +16,13 @@ use crate::postings::TermInfo;
 /// Old sstables have this bit set to 0, as there cannot be more than u32::MAX term infos).
 const IS_RANDOM_ORDER_BIT: u64 = 1 << 31;
 
+/// VInt encodes a number by simply dividing by 128, until reaching a number smaller than 128,
+/// and encoding the final byte with the highest bit turned on.
+/// When encoding a set of large numbers, we can instead encode the smallest of the set, and then
+/// use VInt only on the diff, which effectively means we store (N / 128, where N is our smallest
+/// number in the set) less bytes per item.
+const START_ADDRESS_OPTIMIZATION_BIT: u64 = 1 << 32;
+
 /// The term dictionary contains all of the terms in
 /// `tantivy index` in a sorted manner.
 ///
@@ -48,6 +55,11 @@ pub struct TermInfoValueReader {
     term_infos: Vec<TermInfo>,
 }
 
+#[inline]
+fn extract_flag(num: u64, bit: u64) -> (u64, bool) {
+    (num & !bit, (num & bit) != 0)
+}
+
 impl ValueReader for TermInfoValueReader {
     type Value = TermInfo;
 
@@ -61,16 +73,39 @@ impl ValueReader for TermInfoValueReader {
         self.term_infos.clear();
         let num_els = VInt::deserialize_u64(&mut data)?;
 
-        let is_random_order = (num_els & IS_RANDOM_ORDER_BIT) != 0;
-        let num_els = num_els & !IS_RANDOM_ORDER_BIT;
+        let (num_els, is_random_order) = extract_flag(num_els, IS_RANDOM_ORDER_BIT);
+        let (num_els, is_start_address_optimization) =
+            extract_flag(num_els, START_ADDRESS_OPTIMIZATION_BIT);
 
         if is_random_order {
+            let (
+                min_doc_freq,
+                min_postings_start,
+                min_postings_num_bytes,
+                min_positions_start,
+                min_positions_num_bytes,
+            ) = if is_start_address_optimization {
+                (
+                    VInt::deserialize_u64(&mut data)? as u32,
+                    VInt::deserialize_u64(&mut data)? as usize,
+                    VInt::deserialize_u64(&mut data)? as usize,
+                    VInt::deserialize_u64(&mut data)? as usize,
+                    VInt::deserialize_u64(&mut data)? as usize,
+                )
+            } else {
+                (0, 0, 0, 0, 0)
+            };
+
             for _ in 0..num_els {
-                let doc_freq = VInt::deserialize_u64(&mut data)? as u32;
-                let postings_start = VInt::deserialize_u64(&mut data)? as usize;
-                let postings_num_bytes = VInt::deserialize_u64(&mut data)? as usize;
-                let positions_start = VInt::deserialize_u64(&mut data)? as usize;
-                let positions_num_bytes = VInt::deserialize_u64(&mut data)? as usize;
+                let doc_freq = VInt::deserialize_u64(&mut data)? as u32 + min_doc_freq;
+                let postings_start =
+                    VInt::deserialize_u64(&mut data)? as usize + min_postings_start;
+                let postings_num_bytes =
+                    VInt::deserialize_u64(&mut data)? as usize + min_postings_num_bytes;
+                let positions_start =
+                    VInt::deserialize_u64(&mut data)? as usize + min_positions_start;
+                let positions_num_bytes =
+                    VInt::deserialize_u64(&mut data)? as usize + min_positions_num_bytes;
                 let postings_end = postings_start + postings_num_bytes as usize;
                 let positions_end = positions_start + positions_num_bytes as usize;
                 let term_info = TermInfo {
@@ -84,12 +119,23 @@ impl ValueReader for TermInfoValueReader {
             return Ok(consumed_len);
         }
 
+        let (min_doc_freq, min_postings_num_bytes, min_positions_num_bytes) =
+            if is_start_address_optimization {
+                (
+                    VInt::deserialize_u64(&mut data)? as u32,
+                    VInt::deserialize_u64(&mut data)?,
+                    VInt::deserialize_u64(&mut data)?,
+                )
+            } else {
+                (0, 0, 0)
+            };
+
         let mut postings_start = VInt::deserialize_u64(&mut data)? as usize;
         let mut positions_start = VInt::deserialize_u64(&mut data)? as usize;
         for _ in 0..num_els {
-            let doc_freq = VInt::deserialize_u64(&mut data)? as u32;
-            let postings_num_bytes = VInt::deserialize_u64(&mut data)?;
-            let positions_num_bytes = VInt::deserialize_u64(&mut data)?;
+            let doc_freq = VInt::deserialize_u64(&mut data)? as u32 + min_doc_freq;
+            let postings_num_bytes = VInt::deserialize_u64(&mut data)? + min_postings_num_bytes;
+            let positions_num_bytes = VInt::deserialize_u64(&mut data)? + min_positions_num_bytes;
             let postings_end = postings_start + postings_num_bytes as usize;
             let positions_end = positions_start + positions_num_bytes as usize;
             let term_info = TermInfo {
@@ -110,6 +156,7 @@ impl ValueReader for TermInfoValueReader {
 pub struct TermInfoValueWriter {
     term_infos: Vec<TermInfo>,
     encode_random_order: bool,
+    dont_optimize_start_address: bool,
 }
 
 impl ValueWriter for TermInfoValueWriter {
@@ -133,6 +180,9 @@ impl ValueWriter for TermInfoValueWriter {
         if self.encode_random_order {
             len |= IS_RANDOM_ORDER_BIT;
         }
+        if !self.dont_optimize_start_address {
+            len |= START_ADDRESS_OPTIMIZATION_BIT;
+        }
 
         VInt(len).serialize_into_vec(buffer);
         if self.term_infos.is_empty() {
@@ -140,22 +190,91 @@ impl ValueWriter for TermInfoValueWriter {
         }
 
         if self.encode_random_order {
+            let (
+                min_doc_freq,
+                min_postings_start,
+                min_postings_len,
+                min_positions_start,
+                min_positions_len,
+            ) = if !self.dont_optimize_start_address {
+                let mut min_doc_freq = u64::MAX;
+                let mut min_postings_start = u64::MAX;
+                let mut min_postings_len = u64::MAX;
+                let mut min_positions_start = u64::MAX;
+                let mut min_positions_len = u64::MAX;
+
+                for term_info in &self.term_infos {
+                    min_doc_freq = min_doc_freq.min(term_info.doc_freq as u64);
+                    min_postings_start =
+                        min_postings_start.min(term_info.postings_range.start as u64);
+                    min_postings_len = min_postings_len.min(term_info.postings_range.len() as u64);
+                    min_positions_start =
+                        min_positions_start.min(term_info.positions_range.start as u64);
+                    min_positions_len =
+                        min_positions_len.min(term_info.positions_range.len() as u64);
+                }
+
+                VInt(min_doc_freq as u64).serialize_into_vec(buffer);
+                VInt(min_postings_start as u64).serialize_into_vec(buffer);
+                VInt(min_postings_len as u64).serialize_into_vec(buffer);
+                VInt(min_positions_start as u64).serialize_into_vec(buffer);
+                VInt(min_positions_len as u64).serialize_into_vec(buffer);
+
+                (
+                    min_doc_freq,
+                    min_postings_start,
+                    min_postings_len,
+                    min_positions_start,
+                    min_positions_len,
+                )
+            } else {
+                (0, 0, 0, 0, 0)
+            };
+
             for term_info in &self.term_infos {
-                VInt(term_info.doc_freq as u64).serialize_into_vec(buffer);
-                VInt(term_info.postings_range.start as u64).serialize_into_vec(buffer);
-                VInt(term_info.postings_range.len() as u64).serialize_into_vec(buffer);
-                VInt(term_info.positions_range.start as u64).serialize_into_vec(buffer);
-                VInt(term_info.positions_range.len() as u64).serialize_into_vec(buffer);
+                VInt(term_info.doc_freq as u64 - min_doc_freq).serialize_into_vec(buffer);
+                VInt(term_info.postings_range.start as u64 - min_postings_start)
+                    .serialize_into_vec(buffer);
+                VInt(term_info.postings_range.len() as u64 - min_postings_len)
+                    .serialize_into_vec(buffer);
+                VInt(term_info.positions_range.start as u64 - min_positions_start)
+                    .serialize_into_vec(buffer);
+                VInt(term_info.positions_range.len() as u64 - min_positions_len)
+                    .serialize_into_vec(buffer);
             }
             return;
         }
 
+        let (min_doc_freq, min_postings_len, min_positions_len) = if !self
+            .dont_optimize_start_address
+        {
+            let mut min_doc_freq = u64::MAX;
+            let mut min_postings_len = u64::MAX;
+            let mut min_positions_len = u64::MAX;
+
+            for term_info in &self.term_infos {
+                min_doc_freq = min_doc_freq.min(term_info.doc_freq as u64);
+                min_postings_len = min_postings_len.min(term_info.postings_range.len() as u64);
+                min_positions_len = min_positions_len.min(term_info.positions_range.len() as u64);
+            }
+
+            VInt(min_doc_freq as u64).serialize_into_vec(buffer);
+            VInt(min_postings_len as u64).serialize_into_vec(buffer);
+            VInt(min_positions_len as u64).serialize_into_vec(buffer);
+
+            (min_doc_freq, min_postings_len, min_positions_len)
+        } else {
+            (0, 0, 0)
+        };
+
         VInt(self.term_infos[0].postings_range.start as u64).serialize_into_vec(buffer);
         VInt(self.term_infos[0].positions_range.start as u64).serialize_into_vec(buffer);
         for term_info in &self.term_infos {
-            VInt(term_info.doc_freq as u64).serialize_into_vec(buffer);
-            VInt(term_info.postings_range.len() as u64).serialize_into_vec(buffer);
-            VInt(term_info.positions_range.len() as u64).serialize_into_vec(buffer);
+            VInt(term_info.doc_freq as u64 - min_doc_freq).serialize_into_vec(buffer);
+            VInt(term_info.postings_range.len() as u64 - min_postings_len)
+                .serialize_into_vec(buffer);
+            VInt(term_info.positions_range.len() as u64 - min_positions_len)
+                .serialize_into_vec(buffer);
         }
     }
 
@@ -171,9 +290,7 @@ mod tests {
     use crate::postings::TermInfo;
     use crate::termdict::sstable_termdict::TermInfoValueReader;
 
-    #[test]
-    fn test_block_terminfos() {
-        let mut term_info_writer = super::TermInfoValueWriter::default();
+    fn check_block_terminfos(mut term_info_writer: super::TermInfoValueWriter) {
         term_info_writer.write(&TermInfo {
             doc_freq: 120u32,
             postings_range: 17..45,
@@ -202,5 +319,73 @@ mod tests {
             }
         );
         assert_eq!(buffer.len(), num_bytes);
+    }
+
+    #[test]
+    fn test_block_terminfos() {
+        check_block_terminfos(super::TermInfoValueWriter::default());
+    }
+
+    #[test]
+    fn test_block_terminfos_backwards_compatibility() {
+        check_block_terminfos(super::TermInfoValueWriter {
+            dont_optimize_start_address: true,
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_block_terminfos_random_order() {
+        let mut term_info_writer = super::TermInfoValueWriter::new(true);
+        term_info_writer.write(&TermInfo {
+            doc_freq: 5u32,
+            postings_range: 100..150,
+            positions_range: 200..260,
+        });
+        term_info_writer.write(&TermInfo {
+            doc_freq: 10u32,
+            postings_range: 300..400,
+            positions_range: 450..500,
+        });
+        term_info_writer.write(&TermInfo {
+            doc_freq: 20u32,
+            postings_range: 500..530,
+            positions_range: 600..640,
+        });
+
+        let mut buffer = Vec::new();
+        term_info_writer.serialize_block(&mut buffer);
+
+        let mut term_info_reader = super::TermInfoValueReader::default();
+        let consumed = term_info_reader.load(&buffer).unwrap();
+
+        assert_eq!(consumed, buffer.len());
+
+        let term_infos = &term_info_reader.term_infos;
+        assert_eq!(term_infos.len(), 3);
+        assert_eq!(
+            term_infos[0],
+            TermInfo {
+                doc_freq: 5,
+                postings_range: 100..150,
+                positions_range: 200..260,
+            }
+        );
+        assert_eq!(
+            term_infos[1],
+            TermInfo {
+                doc_freq: 10,
+                postings_range: 300..400,
+                positions_range: 450..500,
+            }
+        );
+        assert_eq!(
+            term_infos[2],
+            TermInfo {
+                doc_freq: 20,
+                postings_range: 500..530,
+                positions_range: 600..640,
+            }
+        );
     }
 }
