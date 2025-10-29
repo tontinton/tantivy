@@ -4,9 +4,11 @@ use crate::docset::{DocSet, TERMINATED};
 use crate::fieldnorm::FieldNormReader;
 use crate::postings::Postings;
 use crate::query::bm25::Bm25Weight;
-use crate::query::{Intersection, Scorer};
+use crate::query::intersection::IntersectionDocSet;
+use crate::query::Scorer;
 use crate::{DocId, Score};
 
+#[derive(Debug)]
 struct PostingsWithOffset<TPostings> {
     offset: u32,
     postings: TPostings,
@@ -68,7 +70,7 @@ impl PhraseScorerFlags {
 }
 
 pub struct PhraseScorer<TPostings: Postings> {
-    intersection_docset: Intersection<PostingsWithOffset<TPostings>, PostingsWithOffset<TPostings>>,
+    intersection_docset: IntersectionDocSet<PostingsWithOffset<TPostings>>,
     num_terms: usize,
     offset: usize,
     left_positions: Vec<u32>,
@@ -425,8 +427,9 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
                 PostingsWithOffset::new(postings, (max_offset - offset) as u32)
             })
             .collect::<Vec<_>>();
+
         let mut scorer = PhraseScorer {
-            intersection_docset: Intersection::new(postings_with_offsets),
+            intersection_docset: IntersectionDocSet::new(postings_with_offsets),
             num_terms: num_docsets,
             offset,
             left_positions: Vec::with_capacity(100),
@@ -513,6 +516,8 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
             if self
                 .flags
                 .contains(PhraseScorerFlags::MUST_MATCH_FIELD_LENGTH)
+                || (self.flags.contains(PhraseScorerFlags::MUST_START)
+                    && self.flags.contains(PhraseScorerFlags::MUST_END))
             {
                 // Note that `estimated_field_len = min(actual_field_num_terms, 255)`
                 // so will match longer values that starts with the queried phrase
@@ -572,6 +577,7 @@ impl<TPostings: Postings> PhraseScorer<TPostings> {
                 return;
             }
         }
+
         self.intersection_docset
             .docset_mut_specialized(self.num_terms - 1)
             .positions(&mut self.right_positions);

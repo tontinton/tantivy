@@ -81,6 +81,74 @@ impl<TDocSet: DocSet> Intersection<TDocSet, TDocSet> {
     }
 }
 
+pub enum IntersectionDocSet<TDocSet: DocSet> {
+    One(TDocSet),
+    Many(Intersection<TDocSet, TDocSet>),
+}
+
+impl<TDocSet: DocSet> IntersectionDocSet<TDocSet> {
+    pub fn new(docsets: Vec<TDocSet>) -> Self {
+        match docsets.len() {
+            0 => unreachable!(),
+            1 => IntersectionDocSet::One(docsets.into_iter().next().unwrap()),
+            _ => IntersectionDocSet::Many(Intersection::new(docsets)),
+        }
+    }
+}
+
+impl<TDocSet: DocSet> DocSet for IntersectionDocSet<TDocSet> {
+    fn advance(&mut self) -> DocId {
+        match self {
+            IntersectionDocSet::One(doc_set) => doc_set.advance(),
+            IntersectionDocSet::Many(intersection) => intersection.advance(),
+        }
+    }
+
+    fn seek(&mut self, target: DocId) -> DocId {
+        match self {
+            IntersectionDocSet::One(docset) => docset.seek(target),
+            IntersectionDocSet::Many(intersection) => intersection.seek(target),
+        }
+    }
+
+    fn doc(&self) -> DocId {
+        match self {
+            IntersectionDocSet::One(docset) => docset.doc(),
+            IntersectionDocSet::Many(intersection) => intersection.doc(),
+        }
+    }
+
+    fn size_hint(&self) -> u32 {
+        match self {
+            IntersectionDocSet::One(docset) => docset.size_hint(),
+            IntersectionDocSet::Many(intersection) => intersection.size_hint(),
+        }
+    }
+}
+
+impl<TScorer: Scorer> Scorer for IntersectionDocSet<TScorer> {
+    fn score(&mut self) -> Score {
+        match self {
+            IntersectionDocSet::One(scorer) => scorer.score(),
+            IntersectionDocSet::Many(intersection) => intersection.score(),
+        }
+    }
+}
+
+impl<TDocSet: DocSet> IntersectionDocSet<TDocSet> {
+    pub fn docset_mut_specialized(&mut self, ord: usize) -> &mut TDocSet {
+        match self {
+            IntersectionDocSet::One(doc_set) => {
+                if ord > 0 {
+                    assert!(false, "Only one docset is allowed");
+                }
+                doc_set
+            }
+            IntersectionDocSet::Many(intersection) => intersection.docset_mut_specialized(ord),
+        }
+    }
+}
+
 impl<TDocSet: DocSet> Intersection<TDocSet, TDocSet> {
     pub(crate) fn docset_mut_specialized(&mut self, ord: usize) -> &mut TDocSet {
         match ord {
