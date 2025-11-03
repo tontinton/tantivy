@@ -238,6 +238,25 @@ impl<TSSTable: SSTable> Dictionary<TSSTable> {
         self.sstable_slice.slice((start_bound, end_bound))
     }
 
+    pub fn file_range_for_key<K: AsRef<[u8]>>(&self, key: K) -> std::ops::Range<usize> {
+        self.sstable_index
+            .get_block_with_key(key.as_ref())
+            .map_or(0..0, |block| block.byte_range)
+    }
+
+    pub fn file_range_for_automaton<'a>(
+        &'a self,
+        automaton: &'a impl Automaton,
+        merge_holes_under_bytes: usize,
+    ) -> impl Iterator<Item = std::ops::Range<usize>> + 'a {
+        self.get_block_iterator_for_range_and_automaton(
+            (Bound::Unbounded, Bound::Unbounded),
+            automaton,
+            merge_holes_under_bytes,
+        )
+        .map(|block| block.byte_range)
+    }
+
     fn get_block_iterator_for_range_and_automaton<'a>(
         &'a self,
         key_range: impl RangeBounds<[u8]>,
@@ -591,10 +610,9 @@ impl<TSSTable: SSTable> Dictionary<TSSTable> {
         StreamerBuilder::new(self, AlwaysMatch)
     }
 
-    /// Returns a range builder filtered with a prefix.
-    pub fn prefix_range<K: AsRef<[u8]>>(&self, prefix: K) -> StreamerBuilder<TSSTable> {
-        let lower_bound = prefix.as_ref();
-        let mut upper_bound = lower_bound.to_vec();
+    /// Returns the upper bound of a given lower bound prefix.
+    pub fn prefix_upper_bound(prefix: &[u8]) -> Vec<u8> {
+        let mut upper_bound = prefix.to_vec();
         for idx in (0..upper_bound.len()).rev() {
             if upper_bound[idx] == 255 {
                 upper_bound.pop();
@@ -603,6 +621,13 @@ impl<TSSTable: SSTable> Dictionary<TSSTable> {
                 break;
             }
         }
+        upper_bound
+    }
+
+    /// Returns a range builder filtered with a prefix.
+    pub fn prefix_range<K: AsRef<[u8]>>(&self, prefix: K) -> StreamerBuilder<TSSTable> {
+        let lower_bound = prefix.as_ref();
+        let upper_bound = Self::prefix_upper_bound(lower_bound);
         let mut builder = self.range().ge(lower_bound);
         if !upper_bound.is_empty() {
             builder = builder.lt(upper_bound);
@@ -631,6 +656,10 @@ impl<TSSTable: SSTable> Dictionary<TSSTable> {
     pub async fn warm_up_dictionary(&self) -> io::Result<()> {
         self.sstable_slice.read_bytes_async().await?;
         Ok(())
+    }
+
+    pub fn full_file_range(&self) -> std::ops::Range<usize> {
+        self.sstable_slice.slice_range()
     }
 }
 

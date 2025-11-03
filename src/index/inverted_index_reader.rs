@@ -1,10 +1,10 @@
 use std::io;
 
 use common::json_path_writer::JSON_END_OF_PATH;
-use common::BinarySerializable;
+use common::{BinarySerializable, OwnedBytes};
 use fnv::FnvHashSet;
 #[cfg(feature = "quickwit")]
-use futures_util::{FutureExt, StreamExt, TryStreamExt};
+use futures_channel::mpsc::UnboundedReceiver;
 #[cfg(feature = "quickwit")]
 use tantivy_fst::automaton::{AlwaysMatch, Automaton};
 
@@ -13,6 +13,10 @@ use crate::positions::PositionReader;
 use crate::postings::{BlockSegmentPostings, SegmentPostings, TermInfo};
 use crate::schema::{IndexRecordOption, Term, Type};
 use crate::termdict::TermDictionary;
+
+// merge holes under 4MiB, that's how many bytes we can hope to receive during a TTFB from
+// S3 (~80MiB/s, and 50ms latency)
+const MERGE_HOLES_UNDER_BYTES: usize = (80 * 1024 * 1024 * 50) / 1000;
 
 /// The inverted index reader is in charge of accessing
 /// the inverted index associated with a specific field.
@@ -257,7 +261,9 @@ impl InvertedIndexReader {
 
 #[cfg(feature = "quickwit")]
 impl InvertedIndexReader {
-    pub(crate) async fn get_term_info_async(&self, term: &Term) -> io::Result<Option<TermInfo>> {
+    /// Get the `TermInfo` of a `Term`.
+    /// This method is for an advanced usage only.
+    pub async fn get_term_info_async(&self, term: &Term) -> io::Result<Option<TermInfo>> {
         self.termdict.get_async(term.serialized_value_bytes()).await
     }
 
@@ -306,26 +312,19 @@ impl InvertedIndexReader {
 
     /// Warmup a block postings given a `Term`.
     /// This method is for an advanced usage only.
-    ///
-    /// returns a boolean, whether the term was found in the dictionary
-    pub async fn warm_postings(&self, term: &Term, with_positions: bool) -> io::Result<bool> {
-        let term_info_opt: Option<TermInfo> = self.get_term_info_async(term).await?;
-        if let Some(term_info) = term_info_opt {
-            let postings = self
-                .postings_file_slice
-                .read_bytes_slice_async(term_info.postings_range.clone());
-            if with_positions {
-                let positions = self
-                    .positions_file_slice
-                    .read_bytes_slice_async(term_info.positions_range.clone());
-                futures_util::future::try_join(postings, positions).await?;
-            } else {
-                postings.await?;
-            }
-            Ok(true)
+    pub async fn warm_postings(&self, term_info: TermInfo, with_positions: bool) -> io::Result<()> {
+        let postings = self
+            .postings_file_slice
+            .read_bytes_slice_async(term_info.postings_range.clone());
+        if with_positions {
+            let positions = self
+                .positions_file_slice
+                .read_bytes_slice_async(term_info.positions_range.clone());
+            futures_util::future::try_join(postings, positions).await?;
         } else {
-            Ok(false)
+            postings.await?;
         }
+        Ok(())
     }
 
     /// Warmup a block postings given a range of `Term`s.
@@ -374,8 +373,8 @@ impl InvertedIndexReader {
 
     fn coalesce_and_send_ranges<I>(
         stream: I,
-        posting_sender: impl Fn(std::ops::Range<usize>) -> std::io::Result<()>,
-        positions_sender: impl Fn(std::ops::Range<usize>) -> std::io::Result<()>,
+        mut posting_sender: impl FnMut(std::ops::Range<usize>) -> std::io::Result<()>,
+        mut positions_sender: impl FnMut(std::ops::Range<usize>) -> std::io::Result<()>,
         merge_gap: usize,
     ) -> std::io::Result<()>
     where
@@ -424,25 +423,21 @@ impl InvertedIndexReader {
 
     /// Warmup a block postings given a range of `Term`s.
     /// This method is for an advanced usage only.
-    ///
-    /// returns a boolean, whether a term matching the range was found in the dictionary
-    pub async fn warm_postings_automaton<
-        A: Automaton + Clone + Send + 'static,
-        E: FnOnce(Box<dyn FnOnce() -> io::Result<()> + Send>) -> F,
-        F: std::future::Future<Output = io::Result<()>>,
-    >(
+    pub async fn warm_postings_automaton<A: Automaton + Clone + Send + 'static>(
         &self,
         automaton: A,
         with_positions: bool,
         reverse: bool,
-        executor: E,
-    ) -> io::Result<bool>
+    ) -> io::Result<(
+        impl FnOnce() -> io::Result<(Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>)>
+            + Send
+            + 'static,
+        UnboundedReceiver<std::ops::Range<usize>>,
+        UnboundedReceiver<std::ops::Range<usize>>,
+    )>
     where
         A::State: Clone,
     {
-        // merge holes under 4MiB, that's how many bytes we can hope to receive during a TTFB from
-        // S3 (~80MiB/s, and 50ms latency)
-        const MERGE_HOLES_UNDER_BYTES: usize = (80 * 1024 * 1024 * 50) / 1000;
         // we build a first iterator to download everything. Simply calling the function already
         // download everything we need from the sstable, but doesn't start iterating over it.
         let _term_info_iter = self
@@ -470,6 +465,9 @@ impl InvertedIndexReader {
             // more leaky abstraction-wise, but a lot better than the alternative
             let mut stream = termdict.search(automaton).into_stream()?;
 
+            let mut posting_ranges = Vec::new();
+            let mut positions_ranges = Vec::new();
+
             Self::coalesce_and_send_ranges(
                 std::iter::from_fn(move || {
                     stream
@@ -477,6 +475,7 @@ impl InvertedIndexReader {
                         .map(|(_k, v)| (v.postings_range.clone(), v.positions_range.clone()))
                 }),
                 |r| {
+                    posting_ranges.push(r.clone());
                     posting_sender
                         .unbounded_send(r)
                         .map_err(|_| std::io::Error::other("failed to send posting range"))
@@ -485,6 +484,7 @@ impl InvertedIndexReader {
                     if !with_positions {
                         return Ok(());
                     }
+                    positions_ranges.push(r.clone());
                     positions_sender
                         .unbounded_send(r)
                         .map_err(|_| std::io::Error::other("failed to send positions range"))
@@ -492,32 +492,34 @@ impl InvertedIndexReader {
                 MERGE_HOLES_UNDER_BYTES,
             )?;
 
-            Ok(())
+            Ok((posting_ranges, positions_ranges))
         };
-        let task_handle = executor(Box::new(cpu_bound_task));
 
-        let posting_downloader = posting_ranges_to_load_stream
-            .map(|posting_slice| {
-                self.postings_file_slice
-                    .read_bytes_slice_async(posting_slice)
-                    .map(|result| result.map(|_slice| ()))
-            })
-            .buffer_unordered(5)
-            .try_collect::<Vec<()>>();
-        let positions_downloader = positions_ranges_to_load_stream
-            .map(|positions_slice| {
-                self.positions_file_slice
-                    .read_bytes_slice_async(positions_slice)
-                    .map(|result| result.map(|_slice| ()))
-            })
-            .buffer_unordered(5)
-            .try_collect::<Vec<()>>();
+        Ok((
+            cpu_bound_task,
+            posting_ranges_to_load_stream,
+            positions_ranges_to_load_stream,
+        ))
+    }
 
-        let (_, posting_slices_downloaded, positions_slices_downloaded) =
-            futures_util::future::try_join3(task_handle, posting_downloader, positions_downloader)
-                .await?;
+    /// Warmup a specific postings file range.
+    /// This method is for an advanced usage only.
+    pub async fn warm_postings_slice(
+        &self,
+        range: std::ops::Range<usize>,
+    ) -> io::Result<OwnedBytes> {
+        self.postings_file_slice.read_bytes_slice_async(range).await
+    }
 
-        Ok(!posting_slices_downloaded.is_empty() || !positions_slices_downloaded.is_empty())
+    /// Warmup a specific positions file range.
+    /// This method is for an advanced usage only.
+    pub async fn warm_positions_slice(
+        &self,
+        range: std::ops::Range<usize>,
+    ) -> io::Result<OwnedBytes> {
+        self.positions_file_slice
+            .read_bytes_slice_async(range)
+            .await
     }
 
     /// Warmup the block postings for all terms.
@@ -540,6 +542,53 @@ impl InvertedIndexReader {
             .await?
             .map(|term_info| term_info.doc_freq)
             .unwrap_or(0u32))
+    }
+
+    /// Get the termdict file range of a specific term.
+    pub fn termdict_file_range_for_term(&self, term: &Term) -> std::ops::Range<usize> {
+        self.terms()
+            .file_range_for_key(term.serialized_value_bytes())
+    }
+
+    /// Get the file range of the entire postings file.
+    pub fn postings_file_range(&self) -> std::ops::Range<usize> {
+        self.postings_file_slice.slice_range()
+    }
+
+    /// Get the file range of the entire positions file.
+    pub fn positions_file_range(&self) -> std::ops::Range<usize> {
+        self.positions_file_slice.slice_range()
+    }
+
+    /// Get the termdict file range of a term range.
+    pub fn termdict_file_range_for_range(
+        &self,
+        terms: impl std::ops::RangeBounds<Term>,
+        limit: Option<u64>,
+    ) -> std::ops::Range<usize> {
+        let lower = terms.start_bound().map(|b| b.serialized_value_bytes());
+        let upper = terms.end_bound().map(|b| b.serialized_value_bytes());
+
+        // warm_postings_range uses AlwaysMatch automaton, meaning we don't need to iterate over
+        // specific blocks, and use file_slice_for_range directly.
+        // For more info see sstable_delta_reader_for_key_range_async's implementation.
+        let slice = self.terms().file_slice_for_range((lower, upper), limit);
+        slice.slice_range()
+    }
+
+    /// Get the termdict file range of an automaton.
+    pub fn termdict_file_ranges_for_automaton<A: Automaton + Clone + Send + 'static>(
+        &self,
+        automaton: A,
+        reverse: bool,
+    ) -> io::Result<Vec<std::ops::Range<usize>>>
+    where
+        A::State: Clone,
+    {
+        Ok(self
+            .terms_ext(reverse)?
+            .file_range_for_automaton(&automaton, MERGE_HOLES_UNDER_BYTES)
+            .collect())
     }
 }
 
