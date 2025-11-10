@@ -110,6 +110,13 @@ impl StrColumn {
         }
         Ok(true)
     }
+
+    pub fn visit_all_ord_terms<F>(&self, mut cb: F) -> io::Result<bool>
+    where F: FnMut(u64, &[u8]) -> io::Result<()> {
+        self.0
+            .dictionary
+            .sorted_ords_to_term_cb_tuple(0..self.0.num_terms() as u64, |ord, term| cb(ord, term))
+    }
 }
 
 impl Deref for StrColumn {

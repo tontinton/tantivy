@@ -508,6 +508,14 @@ impl<TSSTable: SSTable> Dictionary<TSSTable> {
         ord: impl Iterator<Item = TermOrdinal>,
         mut cb: F,
     ) -> io::Result<bool> {
+        return self.sorted_ords_to_term_cb_tuple(ord, |_, term| cb(term));
+    }
+
+    pub fn sorted_ords_to_term_cb_tuple<F: FnMut(u64, &[u8]) -> io::Result<()>>(
+        &self,
+        ord: impl Iterator<Item = TermOrdinal>,
+        mut cb: F,
+    ) -> io::Result<bool> {
         let mut bytes = Vec::new();
         let mut current_block_addr = self.sstable_index.get_block_with_ord(0);
         let mut current_sstable_delta_reader =
@@ -534,11 +542,10 @@ impl<TSSTable: SSTable> Dictionary<TSSTable> {
                 bytes.extend_from_slice(current_sstable_delta_reader.suffix());
             }
             current_ordinal = ord + 1;
-            cb(&bytes)?;
+            cb(ord, &bytes)?;
         }
         Ok(true)
     }
-
     /// Returns the number of terms in the dictionary.
     pub fn term_info_from_ord(&self, term_ord: TermOrdinal) -> io::Result<Option<TSSTable::Value>> {
         // find block in which the term would be
