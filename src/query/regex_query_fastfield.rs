@@ -23,6 +23,16 @@ impl FastFieldRegexQuery {
     pub fn new(regex: Regex, term: Term) -> FastFieldRegexQuery {
         Self { regex, term }
     }
+
+    /// Returns the regex associated with this query.
+    pub fn get_regex(&self) -> &Regex {
+        &self.regex
+    }
+
+    /// Returns the term associated with this query.
+    pub fn get_term(&self) -> &Term {
+        &self.term
+    }
 }
 
 impl Query for FastFieldRegexQuery {
