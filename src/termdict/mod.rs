@@ -184,31 +184,6 @@ impl TermDictionary {
     ) -> FileSlice {
         self.0.file_slice_for_range(key_range, limit)
     }
-
-    #[cfg(feature = "quickwit")]
-    /// Returns a file slice covering all sstable blocks.
-    pub fn full_file_range(&self) -> std::ops::Range<usize> {
-        self.0.full_file_range()
-    }
-
-    #[cfg(feature = "quickwit")]
-    /// Returns a file slice covering a set of sstable blocks
-    /// that includes the key passed as argument.
-    pub fn file_range_for_key<K: AsRef<[u8]>>(&self, key: K) -> std::ops::Range<usize> {
-        self.0.file_range_for_key(key)
-    }
-
-    #[cfg(feature = "quickwit")]
-    /// Returns a file slice covering a set of sstable blocks
-    /// that includes the automaton passed as argument.
-    pub fn file_range_for_automaton<'a>(
-        &'a self,
-        automaton: &'a impl Automaton,
-        merge_holes_under_bytes: usize,
-    ) -> impl Iterator<Item = std::ops::Range<usize>> + 'a {
-        self.0
-            .file_range_for_automaton(automaton, merge_holes_under_bytes)
-    }
 }
 
 /// A TermDictionaryBuilder wrapping either an FST or a SSTable dictionary builder.
