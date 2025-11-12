@@ -281,6 +281,17 @@ impl FastFieldReaders {
     }
 
     #[doc(hidden)]
+    pub fn dynamic_column_handles_file_range(
+        &self,
+        field_name: &str,
+    ) -> crate::Result<std::ops::Range<usize>> {
+        let Some(resolved_field_name) = self.resolve_field(field_name)? else {
+            return Ok(0..0);
+        };
+        Ok(self.columnar.get_columns_file_range(&resolved_field_name))
+    }
+
+    #[doc(hidden)]
     pub async fn list_dynamic_column_handles(
         &self,
         field_name: &str,
@@ -296,8 +307,16 @@ impl FastFieldReaders {
     }
 
     #[doc(hidden)]
-    pub fn file_range(&self) -> std::ops::Range<usize> {
-        self.columnar.file_range()
+    pub fn subpath_dynamic_column_handles_file_range(
+        &self,
+        root_path: &str,
+    ) -> crate::Result<std::ops::Range<usize>> {
+        let Some(resolved_field_name) = self.resolve_field(root_path)? else {
+            return Ok(0..0);
+        };
+        Ok(self
+            .columnar
+            .get_subpath_columns_file_range(&resolved_field_name))
     }
 
     #[doc(hidden)]

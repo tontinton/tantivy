@@ -158,8 +158,21 @@ impl ColumnarReader {
         Ok(self.iter_columns()?.collect())
     }
 
-    pub fn file_range(&self) -> std::ops::Range<usize> {
-        self.column_data.slice_range()
+    fn get_file_range(&self, prefix: String) -> std::ops::Range<usize> {
+        let upper = Dictionary::<RangeSSTable>::prefix_upper_bound(prefix.as_bytes());
+        self.column_dictionary
+            .file_slice_for_range(
+                (
+                    std::ops::Bound::Included(prefix.as_bytes()),
+                    std::ops::Bound::Excluded(upper.as_slice()),
+                ),
+                None,
+            )
+            .slice_range()
+    }
+
+    pub fn get_columns_file_range(&self, column_name: &str) -> std::ops::Range<usize> {
+        self.get_file_range(column_dictionary_prefix_for_column_name(column_name))
     }
 
     pub async fn read_columns_async(
@@ -183,6 +196,10 @@ impl ColumnarReader {
         let prefix = column_dictionary_prefix_for_column_name(column_name);
         let stream = self.column_dictionary.prefix_range(prefix).into_stream()?;
         read_all_columns_in_stream(stream, &self.column_data, self.format_version)
+    }
+
+    pub fn get_subpath_columns_file_range(&self, column_name: &str) -> std::ops::Range<usize> {
+        self.get_file_range(column_dictionary_prefix_for_subpath(column_name))
     }
 
     pub async fn read_subpath_columns_async(
