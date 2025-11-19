@@ -298,6 +298,10 @@ impl FileSlice {
         self.slice(0..to_offset)
     }
 
+    pub fn slice_range(&self) -> Range<usize> {
+        self.range.clone()
+    }
+
     /// Returns the byte count of the FileSlice.
     pub fn num_bytes(&self) -> ByteCount {
         self.range.len().into()

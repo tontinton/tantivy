@@ -296,6 +296,11 @@ impl FastFieldReaders {
     }
 
     #[doc(hidden)]
+    pub fn file_range(&self) -> std::ops::Range<usize> {
+        self.columnar.file_range()
+    }
+
+    #[doc(hidden)]
     pub async fn list_subpath_dynamic_column_handles(
         &self,
         root_path: &str,

@@ -158,6 +158,10 @@ impl ColumnarReader {
         Ok(self.iter_columns()?.collect())
     }
 
+    pub fn file_range(&self) -> std::ops::Range<usize> {
+        self.column_data.slice_range()
+    }
+
     pub async fn read_columns_async(
         &self,
         column_name: &str,

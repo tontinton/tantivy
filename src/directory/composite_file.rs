@@ -197,6 +197,10 @@ where T: BinarySerializable + Clone + Hash + Eq
             .map(|file_addr| file_addr.idx.clone())
             .collect()
     }
+
+    pub fn file_range(&self) -> std::ops::Range<usize> {
+        self.data.slice_range()
+    }
 }
 
 #[cfg(test)]
