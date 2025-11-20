@@ -195,7 +195,19 @@ impl TermDictionary {
     /// Returns a file slice covering a set of sstable blocks
     /// that includes the key passed as argument.
     pub fn file_range_for_key<K: AsRef<[u8]>>(&self, key: K) -> std::ops::Range<usize> {
-        self.0.file_range_for_key(key)
+        self.0
+            .get_block_for_key(key)
+            .and_then(|block_id| self.0.get_block_file_range(block_id))
+            .unwrap_or(0..0)
+    }
+
+    #[cfg(feature = "quickwit")]
+    /// Returns the values sizes of the block found on the key passed as argument.
+    pub fn block_value_sizes_for_key<K: AsRef<[u8]>>(&self, key: K) -> (u64, Option<(u64, u64)>) {
+        let Some(block_id) = self.0.get_block_for_key(key) else {
+            return (0, None);
+        };
+        (block_id, self.0.get_block_values_sizes(block_id))
     }
 
     #[cfg(feature = "quickwit")]
@@ -208,6 +220,15 @@ impl TermDictionary {
     ) -> impl Iterator<Item = std::ops::Range<usize>> + 'a {
         self.0
             .file_range_for_automaton(automaton, merge_holes_under_bytes)
+    }
+
+    #[cfg(feature = "quickwit")]
+    /// Returns the values sizes of blocks found on the automaton passed as argument.
+    pub fn block_value_sizes_for_automaton<'a>(
+        &'a self,
+        automaton: &'a impl Automaton,
+    ) -> impl Iterator<Item = (u64, Option<(u64, u64)>)> + 'a {
+        self.0.block_value_sizes_for_automaton(automaton)
     }
 }
 

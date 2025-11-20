@@ -6,6 +6,7 @@ use zstd::bulk::Compressor;
 
 use super::value::ValueWriter;
 use super::{value, vint, BlockReader};
+use crate::value::BlockValueSizes;
 
 const FOUR_BIT_LIMITS: usize = 1 << 4;
 const VINT_MODE: u8 = 1u8;
@@ -49,7 +50,7 @@ where
         self.block_len = block_len
     }
 
-    pub fn flush_block(&mut self) -> io::Result<Option<Range<usize>>> {
+    pub fn flush_block(&mut self) -> io::Result<Option<(Range<usize>, Option<BlockValueSizes>)>> {
         if self.block.is_empty() {
             return Ok(None);
         }
@@ -57,6 +58,7 @@ where
 
         let buffer: &mut Vec<u8> = &mut self.stateless_buffer;
         self.value_writer.serialize_block(buffer);
+        let block_value_sizes = self.value_writer.block_value_sizes();
         self.value_writer.clear();
 
         let block_len = buffer.len() + self.block.len();
@@ -92,7 +94,7 @@ where
         let end_offset = self.write.written_bytes() as usize;
         self.block.clear();
         buffer.clear();
-        Ok(Some(start_offset..end_offset))
+        Ok(Some((start_offset..end_offset, block_value_sizes)))
     }
 
     fn encode_keep_add(&mut self, keep_len: usize, add_len: usize) {
@@ -118,7 +120,9 @@ where
         self.value_writer.write(value);
     }
 
-    pub fn flush_block_if_required(&mut self) -> io::Result<Option<Range<usize>>> {
+    pub fn flush_block_if_required(
+        &mut self,
+    ) -> io::Result<Option<(Range<usize>, Option<BlockValueSizes>)>> {
         if self.block.len() > self.block_len {
             return self.flush_block();
         }

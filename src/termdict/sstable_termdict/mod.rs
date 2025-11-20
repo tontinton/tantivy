@@ -5,7 +5,7 @@ mod merger;
 use std::iter::ExactSizeIterator;
 
 use common::VInt;
-use sstable::value::{ValueReader, ValueWriter};
+use sstable::value::{BlockValueSizes, ValueReader, ValueWriter};
 use sstable::SSTable;
 use tantivy_fst::automaton::AlwaysMatch;
 
@@ -157,6 +157,7 @@ pub struct TermInfoValueWriter {
     term_infos: Vec<TermInfo>,
     encode_random_order: bool,
     dont_optimize_start_address: bool,
+    block_sizes: BlockValueSizes,
 }
 
 impl ValueWriter for TermInfoValueWriter {
@@ -171,6 +172,8 @@ impl ValueWriter for TermInfoValueWriter {
 
     fn write(&mut self, term_info: &TermInfo) {
         self.term_infos.push(term_info.clone());
+        self.block_sizes.postings_size += term_info.posting_num_bytes() as u64;
+        self.block_sizes.positions_size += term_info.positions_num_bytes() as u64;
     }
 
     fn serialize_block(&self, buffer: &mut Vec<u8>) {
@@ -278,8 +281,13 @@ impl ValueWriter for TermInfoValueWriter {
         }
     }
 
+    fn block_value_sizes(&self) -> Option<BlockValueSizes> {
+        Some(self.block_sizes.clone())
+    }
+
     fn clear(&mut self) {
         self.term_infos.clear();
+        self.block_sizes = BlockValueSizes::default();
     }
 }
 

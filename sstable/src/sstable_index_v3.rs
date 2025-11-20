@@ -2,12 +2,13 @@ use std::io::{self, Read, Write};
 use std::ops::Range;
 use std::sync::Arc;
 
-use common::{BinarySerializable, FixedSize, OwnedBytes};
+use common::{BinarySerializable, FixedSize, OwnedBytes, VInt};
 use tantivy_bitpacker::{compute_num_bits, BitPacker};
 use tantivy_fst::raw::Fst;
 use tantivy_fst::{Automaton, IntoStreamer, Map, MapBuilder, Streamer};
 
 use crate::block_match_automaton::can_block_match_automaton;
+use crate::value::BlockValueSizes;
 use crate::{common_prefix_len, SSTableDataCorruption, TermOrdinal};
 
 #[derive(Debug, Clone)]
@@ -24,6 +25,14 @@ impl SSTableIndex {
             SSTableIndex::V2(v2_index) => v2_index.get_block(block_id as usize),
             SSTableIndex::V3(v3_index) => v3_index.get_block(block_id),
             SSTableIndex::V3Empty(v3_empty) => v3_empty.get_block(block_id),
+        }
+    }
+
+    /// Get the [`BlockValueSizes`] of the requested block.
+    pub(crate) fn get_block_sizes(&self, block_id: u64) -> Option<(u64, u64)> {
+        match self {
+            SSTableIndex::V3(v3_index) => v3_index.get_block_sizes(block_id),
+            SSTableIndex::V2(_) | SSTableIndex::V3Empty(_) => None,
         }
     }
 
@@ -106,6 +115,7 @@ impl<V2: Iterator<Item = T>, V3: Iterator<Item = T>, T> Iterator for BlockIter<V
 pub struct SSTableIndexV3 {
     fst_index: Arc<Map<OwnedBytes>>,
     block_addr_store: BlockAddrStore,
+    block_sizes: Vec<BlockValueSizes>,
 }
 
 impl SSTableIndexV3 {
@@ -114,22 +124,60 @@ impl SSTableIndexV3 {
         data: OwnedBytes,
         fst_length: u64,
     ) -> Result<SSTableIndexV3, SSTableDataCorruption> {
+        const BLOCK_VALUE_SIZES_STORED_BIT: u64 = 1u64 << 63;
+
+        let is_block_value_sizes_stored = (fst_length & BLOCK_VALUE_SIZES_STORED_BIT) != 0;
+        let fst_length = fst_length & !BLOCK_VALUE_SIZES_STORED_BIT;
+
         let (fst_slice, block_addr_store_slice) = data.split(fst_length as usize);
         let fst_index = Fst::new(fst_slice)
             .map_err(|_| SSTableDataCorruption)?
             .into();
-        let block_addr_store =
-            BlockAddrStore::open(block_addr_store_slice).map_err(|_| SSTableDataCorruption)?;
+
+        let (block_addr_store, mut sizes_slice) = if is_block_value_sizes_stored {
+            BlockAddrStore::open_with_block_value_sizes(block_addr_store_slice)
+                .map_err(|_| SSTableDataCorruption)?
+        } else {
+            (
+                BlockAddrStore::open(block_addr_store_slice).map_err(|_| SSTableDataCorruption)?,
+                OwnedBytes::empty(),
+            )
+        };
+
+        let mut block_sizes = Vec::new();
+        if !sizes_slice.is_empty() {
+            let num_blocks =
+                VInt::deserialize_u64(&mut sizes_slice).map_err(|_| SSTableDataCorruption)?;
+            block_sizes.reserve_exact(num_blocks as usize);
+            for _ in 0..num_blocks {
+                let postings_size =
+                    VInt::deserialize_u64(&mut sizes_slice).map_err(|_| SSTableDataCorruption)?;
+                let positions_size =
+                    VInt::deserialize_u64(&mut sizes_slice).map_err(|_| SSTableDataCorruption)?;
+                block_sizes.push(BlockValueSizes {
+                    postings_size,
+                    positions_size,
+                });
+            }
+        }
 
         Ok(SSTableIndexV3 {
             fst_index: Arc::new(fst_index),
             block_addr_store,
+            block_sizes,
         })
     }
 
     /// Get the [`BlockAddr`] of the requested block.
     pub(crate) fn get_block(&self, block_id: u64) -> Option<BlockAddr> {
         self.block_addr_store.get(block_id)
+    }
+
+    /// Get the [`BlockValueSizes`] of the requested block.
+    pub(crate) fn get_block_sizes(&self, block_id: u64) -> Option<(u64, u64)> {
+        self.block_sizes
+            .get(block_id as usize)
+            .map(|sizes| (sizes.postings_size, sizes.positions_size))
     }
 
     /// Get the block id of the block that would contain `key`.
@@ -294,6 +342,7 @@ pub(crate) struct BlockMeta {
     /// and yet strictly smaller than the first key in the next block.
     pub last_key_or_greater: Vec<u8>,
     pub block_addr: BlockAddr,
+    pub block_value_sizes: Option<BlockValueSizes>,
 }
 
 impl BinarySerializable for BlockStartAddr {
@@ -357,13 +406,20 @@ impl SSTableIndexBuilder {
         }
     }
 
-    pub fn add_block(&mut self, last_key: &[u8], byte_range: Range<usize>, first_ordinal: u64) {
+    pub fn add_block(
+        &mut self,
+        last_key: &[u8],
+        byte_range: Range<usize>,
+        first_ordinal: u64,
+        block_value_sizes: Option<BlockValueSizes>,
+    ) {
         self.blocks.push(BlockMeta {
             last_key_or_greater: last_key.to_vec(),
             block_addr: BlockAddr {
                 byte_range,
                 first_ordinal,
             },
+            block_value_sizes,
         })
     }
 
@@ -382,13 +438,55 @@ impl SSTableIndexBuilder {
         let written_bytes = counting_writer.written_bytes();
         let mut wrt = counting_writer.finish();
 
+        let has_block_sizes = self
+            .blocks
+            .first()
+            .and_then(|b| b.block_value_sizes.as_ref())
+            .is_some();
+
         let mut block_store_writer = BlockAddrStoreWriter::new();
         for block in &self.blocks {
             block_store_writer.write_block_meta(block.block_addr.clone())?;
         }
-        block_store_writer.serialize(&mut wrt)?;
+        block_store_writer.serialize(&mut wrt, has_block_sizes)?;
 
-        Ok(written_bytes)
+        if has_block_sizes {
+            let mut buf = Vec::with_capacity(size_of::<BlockValueSizes>());
+            VInt(self.blocks.len() as u64).serialize(&mut wrt)?;
+
+            for block in &self.blocks {
+                if let Some(sizes) = &block.block_value_sizes {
+                    VInt(sizes.postings_size).serialize_into_vec(&mut buf);
+                    VInt(sizes.positions_size).serialize_into_vec(&mut buf);
+                    wrt.write_all(&buf)?;
+                    buf.clear();
+                } else {
+                    panic!(
+                        "All blocks must have block_value_sizes or none should (has_block_sizes)"
+                    );
+                }
+            }
+        } else {
+            for block in &self.blocks {
+                assert!(
+                    block.block_value_sizes.is_none(),
+                    "All blocks must have block_value_sizes or none should"
+                );
+            }
+        }
+
+        const BLOCK_VALUE_SIZES_STORED_BIT: u64 = 1u64 << 63;
+        let fst_length_with_flag = if has_block_sizes {
+            assert!(
+                written_bytes & BLOCK_VALUE_SIZES_STORED_BIT == 0,
+                "BLOCK_VALUE_SIZES_STORED_BIT already set in written_bytes"
+            );
+            written_bytes | BLOCK_VALUE_SIZES_STORED_BIT
+        } else {
+            written_bytes
+        };
+
+        Ok(fst_length_with_flag)
     }
 }
 
@@ -564,6 +662,24 @@ struct BlockAddrStore {
 }
 
 impl BlockAddrStore {
+    fn open_with_block_value_sizes(
+        term_info_store_file: OwnedBytes,
+    ) -> io::Result<(BlockAddrStore, OwnedBytes)> {
+        let (lens_slice, main_slice) = term_info_store_file.split(16);
+        let (mut block_meta_len_slice, mut addr_len_slice) = lens_slice.split(8);
+        let block_meta_len = u64::deserialize(&mut block_meta_len_slice)? as usize;
+        let addr_len = u64::deserialize(&mut addr_len_slice)? as usize;
+        let (block_meta_bytes, addr_bytes_and_rest) = main_slice.split(block_meta_len);
+        let (addr_bytes, rest) = addr_bytes_and_rest.split(addr_len);
+        Ok((
+            BlockAddrStore {
+                block_meta_bytes,
+                addr_bytes,
+            },
+            rest,
+        ))
+    }
+
     fn open(term_info_store_file: OwnedBytes) -> io::Result<BlockAddrStore> {
         let (mut len_slice, main_slice) = term_info_store_file.split(8);
         let len = u64::deserialize(&mut len_slice)? as usize;
@@ -749,10 +865,21 @@ impl BlockAddrStoreWriter {
         Ok(())
     }
 
-    fn serialize<W: std::io::Write>(&mut self, wrt: &mut W) -> io::Result<()> {
+    fn serialize<W: std::io::Write>(
+        &mut self,
+        wrt: &mut W,
+        with_block_value_sizes: bool,
+    ) -> io::Result<()> {
         self.flush_block()?;
-        let len = self.buffer_block_metas.len() as u64;
-        len.serialize(wrt)?;
+        if with_block_value_sizes {
+            let block_metas_len = self.buffer_block_metas.len() as u64;
+            let block_addrs_len = self.buffer_addrs.len() as u64;
+            block_metas_len.serialize(wrt)?;
+            block_addrs_len.serialize(wrt)?;
+        } else {
+            let len = self.buffer_block_metas.len() as u64;
+            len.serialize(wrt)?;
+        }
         wrt.write_all(&self.buffer_block_metas)?;
         wrt.write_all(&self.buffer_addrs)?;
         Ok(())
@@ -830,10 +957,10 @@ mod tests {
     #[test]
     fn test_sstable_index() {
         let mut sstable_builder = SSTableIndexBuilder::default();
-        sstable_builder.add_block(b"aaa", 10..20, 0u64);
-        sstable_builder.add_block(b"bbbbbbb", 20..30, 5u64);
-        sstable_builder.add_block(b"ccc", 30..40, 10u64);
-        sstable_builder.add_block(b"dddd", 40..50, 15u64);
+        sstable_builder.add_block(b"aaa", 10..20, 0u64, None);
+        sstable_builder.add_block(b"bbbbbbb", 20..30, 5u64, None);
+        sstable_builder.add_block(b"ccc", 30..40, 10u64, None);
+        sstable_builder.add_block(b"dddd", 40..50, 15u64, None);
         let mut buffer: Vec<u8> = Vec::new();
         let fst_len = sstable_builder.serialize(&mut buffer).unwrap();
         let buffer = OwnedBytes::new(buffer);
@@ -862,10 +989,10 @@ mod tests {
     #[test]
     fn test_sstable_with_corrupted_data() {
         let mut sstable_builder = SSTableIndexBuilder::default();
-        sstable_builder.add_block(b"aaa", 10..20, 0u64);
-        sstable_builder.add_block(b"bbbbbbb", 20..30, 5u64);
-        sstable_builder.add_block(b"ccc", 30..40, 10u64);
-        sstable_builder.add_block(b"dddd", 40..50, 15u64);
+        sstable_builder.add_block(b"aaa", 10..20, 0u64, None);
+        sstable_builder.add_block(b"bbbbbbb", 20..30, 5u64, None);
+        sstable_builder.add_block(b"ccc", 30..40, 10u64, None);
+        sstable_builder.add_block(b"dddd", 40..50, 15u64, None);
         let mut buffer: Vec<u8> = Vec::new();
         let fst_len = sstable_builder.serialize(&mut buffer).unwrap();
         buffer[2] = 9u8;
@@ -924,6 +1051,7 @@ mod tests {
                         first_ordinal: 0,
                         byte_range: 0..10,
                     },
+                    block_value_sizes: None,
                 },
                 BlockMeta {
                     last_key_or_greater: vec![0, 2, 2],
@@ -931,6 +1059,7 @@ mod tests {
                         first_ordinal: 5,
                         byte_range: 10..20,
                     },
+                    block_value_sizes: None,
                 },
                 BlockMeta {
                     last_key_or_greater: vec![0, 3, 2],
@@ -938,6 +1067,7 @@ mod tests {
                         first_ordinal: 10,
                         byte_range: 20..30,
                     },
+                    block_value_sizes: None,
                 },
             ],
         };
@@ -1016,5 +1146,213 @@ mod tests {
                 )
             ]
         );
+    }
+
+    #[test]
+    fn test_sstable_without_block_value_sizes() {
+        // Tests that the format works correctly when block_value_sizes is None.
+        // get_block_sizes() should return None in this case.
+        let mut sstable_builder = SSTableIndexBuilder::default();
+        sstable_builder.add_block(b"aaa", 10..20, 0u64, None);
+        sstable_builder.add_block(b"bbbbbbb", 20..30, 5u64, None);
+        sstable_builder.add_block(b"ccc", 30..40, 10u64, None);
+        sstable_builder.add_block(b"dddd", 40..50, 15u64, None);
+        let mut buffer: Vec<u8> = Vec::new();
+        let fst_len = sstable_builder.serialize(&mut buffer).unwrap();
+
+        // Verify the highest bit is NOT set when block_value_sizes is None
+        const BLOCK_VALUE_SIZES_STORED_BIT: u64 = 1u64 << 63;
+        assert_eq!(fst_len & BLOCK_VALUE_SIZES_STORED_BIT, 0);
+
+        let buffer = OwnedBytes::new(buffer);
+
+        let sstable_index = SSTableIndexV3::load(buffer, fst_len).unwrap();
+
+        assert_eq!(
+            sstable_index.get_block_with_key(b"bbbde"),
+            Some(BlockAddr {
+                byte_range: 30..40,
+                first_ordinal: 10
+            })
+        );
+
+        assert_eq!(sstable_index.get_block_sizes(0), None);
+        assert_eq!(sstable_index.get_block_sizes(1), None);
+        assert_eq!(sstable_index.get_block_sizes(2), None);
+        assert_eq!(sstable_index.get_block_sizes(3), None);
+
+        assert_eq!(sstable_index.locate_with_key(b"aaa"), Some(0));
+        assert_eq!(sstable_index.locate_with_key(b"bbbbbbb"), Some(1));
+        assert_eq!(sstable_index.locate_with_key(b"ccc"), Some(2));
+        assert_eq!(sstable_index.locate_with_key(b"dddd"), Some(3));
+    }
+
+    #[test]
+    fn test_sstable_with_block_value_sizes() {
+        // Tests that the format correctly stores and retrieves block sizes.
+        // get_block_sizes() should return the correct sizes for each block.
+        let mut sstable_builder = SSTableIndexBuilder::default();
+        sstable_builder.add_block(
+            b"aaa",
+            10..20,
+            0u64,
+            Some(BlockValueSizes {
+                postings_size: 100,
+                positions_size: 50,
+            }),
+        );
+        sstable_builder.add_block(
+            b"bbbbbbb",
+            20..30,
+            5u64,
+            Some(BlockValueSizes {
+                postings_size: 200,
+                positions_size: 150,
+            }),
+        );
+        sstable_builder.add_block(
+            b"ccc",
+            30..40,
+            10u64,
+            Some(BlockValueSizes {
+                postings_size: 300,
+                positions_size: 250,
+            }),
+        );
+        sstable_builder.add_block(
+            b"dddd",
+            40..50,
+            15u64,
+            Some(BlockValueSizes {
+                postings_size: 400,
+                positions_size: 350,
+            }),
+        );
+        let mut buffer: Vec<u8> = Vec::new();
+        let fst_len = sstable_builder.serialize(&mut buffer).unwrap();
+
+        // Verify the highest bit IS set when block_value_sizes is present
+        const BLOCK_VALUE_SIZES_STORED_BIT: u64 = 1u64 << 63;
+        assert_ne!(fst_len & BLOCK_VALUE_SIZES_STORED_BIT, 0);
+
+        let buffer = OwnedBytes::new(buffer);
+
+        let sstable_index = SSTableIndexV3::load(buffer, fst_len).unwrap();
+
+        assert_eq!(
+            sstable_index.get_block_with_key(b"bbbde"),
+            Some(BlockAddr {
+                byte_range: 30..40,
+                first_ordinal: 10
+            })
+        );
+
+        assert_eq!(sstable_index.get_block_sizes(0), Some((100, 50)));
+        assert_eq!(sstable_index.get_block_sizes(1), Some((200, 150)));
+        assert_eq!(sstable_index.get_block_sizes(2), Some((300, 250)));
+        assert_eq!(sstable_index.get_block_sizes(3), Some((400, 350)));
+
+        assert_eq!(sstable_index.locate_with_key(b"aaa"), Some(0));
+        assert_eq!(sstable_index.locate_with_key(b"bbbbbbb"), Some(1));
+        assert_eq!(sstable_index.locate_with_key(b"ccc"), Some(2));
+        assert_eq!(sstable_index.locate_with_key(b"dddd"), Some(3));
+    }
+
+    #[test]
+    fn test_sstable_fst_length_encoding_roundtrip() {
+        // Tests that the highest bit encoding works correctly for round-trip serialization/deserialization
+        const BLOCK_VALUE_SIZES_STORED_BIT: u64 = 1u64 << 63;
+
+        // Test without block sizes (need at least 2 blocks for serialize to create an index)
+        let mut builder_without = SSTableIndexBuilder::default();
+        builder_without.add_block(b"aaa", 10..20, 0u64, None);
+        builder_without.add_block(b"bbb", 20..30, 5u64, None);
+        let mut buffer_without = Vec::new();
+        let fst_len_without = builder_without.serialize(&mut buffer_without).unwrap();
+
+        // Verify bit is not set
+        assert_eq!(fst_len_without & BLOCK_VALUE_SIZES_STORED_BIT, 0);
+
+        // Verify round-trip works
+        let index_without =
+            SSTableIndexV3::load(OwnedBytes::new(buffer_without), fst_len_without).unwrap();
+        assert_eq!(index_without.get_block_sizes(0), None);
+        assert_eq!(index_without.get_block_sizes(1), None);
+
+        // Test with block sizes (need at least 2 blocks)
+        let mut builder_with = SSTableIndexBuilder::default();
+        builder_with.add_block(
+            b"aaa",
+            10..20,
+            0u64,
+            Some(BlockValueSizes {
+                postings_size: 123,
+                positions_size: 456,
+            }),
+        );
+        builder_with.add_block(
+            b"bbb",
+            20..30,
+            5u64,
+            Some(BlockValueSizes {
+                postings_size: 789,
+                positions_size: 012,
+            }),
+        );
+        let mut buffer_with = Vec::new();
+        let fst_len_with = builder_with.serialize(&mut buffer_with).unwrap();
+
+        // Verify bit IS set
+        assert_ne!(fst_len_with & BLOCK_VALUE_SIZES_STORED_BIT, 0);
+
+        // Verify the actual fst_length (without the bit) is reasonable
+        let actual_fst_len = fst_len_with & !BLOCK_VALUE_SIZES_STORED_BIT;
+        assert!(actual_fst_len > 0 && actual_fst_len < 1000); // reasonable size for this small test
+
+        // Verify round-trip works
+        let index_with = SSTableIndexV3::load(OwnedBytes::new(buffer_with), fst_len_with).unwrap();
+        assert_eq!(index_with.get_block_sizes(0), Some((123, 456)));
+        assert_eq!(index_with.get_block_sizes(1), Some((789, 12)));
+    }
+
+    #[test]
+    fn test_sstable_size_with_and_without_block_value_sizes() {
+        // Tests that the format with block sizes is larger than without block sizes.
+        let mut buffer_without_sizes: Vec<u8> = Vec::new();
+        let mut buffer_with_sizes: Vec<u8> = Vec::new();
+
+        {
+            let mut sstable_builder = SSTableIndexBuilder::default();
+            sstable_builder.add_block(b"aaa", 10..20, 0u64, None);
+            sstable_builder.add_block(b"bbbbbbb", 20..30, 5u64, None);
+            sstable_builder
+                .serialize(&mut buffer_without_sizes)
+                .unwrap();
+        }
+
+        {
+            let mut sstable_builder = SSTableIndexBuilder::default();
+            sstable_builder.add_block(
+                b"aaa",
+                10..20,
+                0u64,
+                Some(BlockValueSizes {
+                    postings_size: 100,
+                    positions_size: 50,
+                }),
+            );
+            sstable_builder.add_block(
+                b"bbbbbbb",
+                20..30,
+                5u64,
+                Some(BlockValueSizes {
+                    postings_size: 200,
+                    positions_size: 150,
+                }),
+            );
+            sstable_builder.serialize(&mut buffer_with_sizes).unwrap();
+        }
+
+        assert!(buffer_with_sizes.len() > buffer_without_sizes.len());
     }
 }

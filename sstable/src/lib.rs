@@ -285,11 +285,14 @@ where
     }
 
     pub fn flush_block_if_required(&mut self) -> io::Result<()> {
-        if let Some(byte_range) = self.delta_writer.flush_block_if_required()? {
+        if let Some((byte_range, block_value_sizes)) =
+            self.delta_writer.flush_block_if_required()?
+        {
             self.index_builder.add_block(
                 &self.previous_key[..],
                 byte_range,
                 self.first_ordinal_of_the_block,
+                block_value_sizes,
             );
             self.first_ordinal_of_the_block = self.num_terms;
             self.previous_key.clear();
@@ -298,11 +301,12 @@ where
     }
 
     pub fn finish(mut self) -> io::Result<W> {
-        if let Some(byte_range) = self.delta_writer.flush_block()? {
+        if let Some((byte_range, block_value_sizes)) = self.delta_writer.flush_block()? {
             self.index_builder.add_block(
                 &self.previous_key[..],
                 byte_range,
                 self.first_ordinal_of_the_block,
+                block_value_sizes,
             );
             self.first_ordinal_of_the_block = self.num_terms;
         }

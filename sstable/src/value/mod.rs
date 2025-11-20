@@ -5,6 +5,12 @@ mod void;
 
 use std::io;
 
+#[derive(Debug, Default, Clone)]
+pub struct BlockValueSizes {
+    pub postings_size: u64,
+    pub positions_size: u64,
+}
+
 /// `ValueReader` is a trait describing the contract of something
 /// reading blocks of value, and offering random access within this values.
 pub trait ValueReader: Default {
@@ -41,6 +47,11 @@ pub trait ValueWriter: Default {
 
     /// Serializes the accumulated values into the output buffer.
     fn serialize_block(&self, output: &mut Vec<u8>);
+
+    /// Get a block's postings and positions size.
+    fn block_value_sizes(&self) -> Option<BlockValueSizes> {
+        None
+    }
 
     /// Clears the `ValueWriter`. After a call to clear, the `ValueWriter`
     /// should behave like a fresh `ValueWriter::default()`.

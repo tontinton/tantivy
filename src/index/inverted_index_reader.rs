@@ -568,6 +568,12 @@ impl InvertedIndexReader {
             .file_range_for_key(term.serialized_value_bytes())
     }
 
+    /// Get the (postings, positions) file sizes of a block (FST) found by a term.
+    pub fn postings_positions_sizes_for_term(&self, term: &Term) -> (u64, Option<(u64, u64)>) {
+        self.terms()
+            .block_value_sizes_for_key(term.serialized_value_bytes())
+    }
+
     /// Get the file range of the entire postings file.
     pub fn postings_file_range(&self) -> std::ops::Range<usize> {
         self.postings_file_slice.slice_range()
@@ -606,6 +612,21 @@ impl InvertedIndexReader {
         Ok(self
             .terms_ext(reverse)?
             .file_range_for_automaton(&automaton, MERGE_HOLES_UNDER_BYTES)
+            .collect())
+    }
+
+    /// Get the (postings, positions) file sizes of blocks (FST) found by an automaton.
+    pub fn postings_positions_sizes_for_automaton<A: Automaton + Clone + Send + 'static>(
+        &self,
+        automaton: A,
+        reverse: bool,
+    ) -> io::Result<Vec<(u64, Option<(u64, u64)>)>>
+    where
+        A::State: Clone,
+    {
+        Ok(self
+            .terms_ext(reverse)?
+            .block_value_sizes_for_automaton(&automaton)
             .collect())
     }
 }

@@ -238,10 +238,18 @@ impl<TSSTable: SSTable> Dictionary<TSSTable> {
         self.sstable_slice.slice((start_bound, end_bound))
     }
 
-    pub fn file_range_for_key<K: AsRef<[u8]>>(&self, key: K) -> std::ops::Range<usize> {
+    pub fn get_block_for_key<K: AsRef<[u8]>>(&self, key: K) -> Option<u64> {
+        self.sstable_index.locate_with_key(key.as_ref())
+    }
+
+    pub fn get_block_file_range(&self, block_id: u64) -> Option<std::ops::Range<usize>> {
         self.sstable_index
-            .get_block_with_key(key.as_ref())
-            .map_or(0..0, |block| block.byte_range)
+            .get_block(block_id)
+            .map(|block| block.byte_range)
+    }
+
+    pub fn get_block_values_sizes(&self, block_id: u64) -> Option<(u64, u64)> {
+        self.sstable_index.get_block_sizes(block_id)
     }
 
     pub fn file_range_for_automaton<'a>(
@@ -255,6 +263,15 @@ impl<TSSTable: SSTable> Dictionary<TSSTable> {
             merge_holes_under_bytes,
         )
         .map(|block| block.byte_range)
+    }
+
+    pub fn block_value_sizes_for_automaton<'a>(
+        &'a self,
+        automaton: &'a impl Automaton,
+    ) -> impl Iterator<Item = (u64, Option<(u64, u64)>)> + 'a {
+        self.sstable_index
+            .get_block_for_automaton(automaton)
+            .map(|(id, _)| (id, self.sstable_index.get_block_sizes(id)))
     }
 
     fn get_block_iterator_for_range_and_automaton<'a>(
