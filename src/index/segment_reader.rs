@@ -3,6 +3,7 @@ use std::ops::BitOrAssign;
 use std::sync::{Arc, RwLock};
 use std::{fmt, io};
 
+use columnar::DynamicColumnHandle;
 use fnv::FnvHashMap;
 use itertools::Itertools;
 
@@ -432,6 +433,13 @@ impl SegmentReader {
         let merged = merge_field_meta_data(vec![indexed_fields, fast_fields], &self.schema);
 
         Ok(merged)
+    }
+
+    /// Get all fast fields columns.
+    pub fn iter_all_fast_fields_columns(
+        &self,
+    ) -> io::Result<impl Iterator<Item = (String, DynamicColumnHandle)> + '_> {
+        self.fast_fields().columnar().iter_columns()
     }
 
     /// Returns the segment id
