@@ -4,7 +4,8 @@ mod merger;
 
 use std::iter::ExactSizeIterator;
 
-use common::VInt;
+use common::{VInt, MERGE_HOLES_UNDER_BYTES};
+use itertools::Itertools;
 use sstable::value::{BlockValueSizes, ValueReader, ValueWriter};
 use sstable::SSTable;
 use tantivy_fst::automaton::AlwaysMatch;
@@ -282,13 +283,45 @@ impl ValueWriter for TermInfoValueWriter {
     }
 
     fn block_value_sizes(&self) -> Option<BlockValueSizes> {
-        Some(self.block_sizes.clone())
+        let postings_size = merged_ranges_size(
+            self.term_infos
+                .iter()
+                .map(|t| t.postings_range.clone())
+                .collect(),
+        );
+
+        let positions_size = merged_ranges_size(
+            self.term_infos
+                .iter()
+                .map(|t| t.positions_range.clone())
+                .collect(),
+        );
+
+        let mut block_sizes = self.block_sizes.clone();
+        block_sizes.coalesced_postings_size = postings_size as u64;
+        block_sizes.coalesced_positions_size = positions_size as u64;
+        Some(block_sizes)
     }
 
     fn clear(&mut self) {
         self.term_infos.clear();
         self.block_sizes = BlockValueSizes::default();
     }
+}
+
+fn merged_ranges_size(mut ranges: Vec<std::ops::Range<usize>>) -> usize {
+    ranges.sort_by_key(|r| r.start);
+    ranges
+        .into_iter()
+        .coalesce(|first, second| {
+            if first.end + MERGE_HOLES_UNDER_BYTES >= second.start {
+                Ok(first.start..second.end)
+            } else {
+                Err((first, second))
+            }
+        })
+        .map(|range| range.len())
+        .sum()
 }
 
 #[cfg(test)]

@@ -5,10 +5,12 @@ mod void;
 
 use std::io;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct BlockValueSizes {
     pub postings_size: u64,
     pub positions_size: u64,
+    pub coalesced_postings_size: u64,
+    pub coalesced_positions_size: u64,
 }
 
 /// `ValueReader` is a trait describing the contract of something

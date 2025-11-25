@@ -11,6 +11,9 @@ use crate::block_match_automaton::can_block_match_automaton;
 use crate::value::BlockValueSizes;
 use crate::{common_prefix_len, SSTableDataCorruption, TermOrdinal};
 
+const BLOCK_VALUE_SIZES_STORED_BIT: u64 = 1u64 << 63;
+const BLOCK_VALUE_SIZES_EXT_STORED_BIT: u64 = 1u64 << 62;
+
 #[derive(Debug, Clone)]
 pub enum SSTableIndex {
     V2(crate::sstable_index_v2::SSTableIndex),
@@ -29,7 +32,7 @@ impl SSTableIndex {
     }
 
     /// Get the [`BlockValueSizes`] of the requested block.
-    pub(crate) fn get_block_sizes(&self, block_id: u64) -> Option<(u64, u64)> {
+    pub(crate) fn get_block_sizes(&self, block_id: u64) -> Option<BlockValueSizes> {
         match self {
             SSTableIndex::V3(v3_index) => v3_index.get_block_sizes(block_id),
             SSTableIndex::V2(_) | SSTableIndex::V3Empty(_) => None,
@@ -124,10 +127,10 @@ impl SSTableIndexV3 {
         data: OwnedBytes,
         fst_length: u64,
     ) -> Result<SSTableIndexV3, SSTableDataCorruption> {
-        const BLOCK_VALUE_SIZES_STORED_BIT: u64 = 1u64 << 63;
-
         let is_block_value_sizes_stored = (fst_length & BLOCK_VALUE_SIZES_STORED_BIT) != 0;
         let fst_length = fst_length & !BLOCK_VALUE_SIZES_STORED_BIT;
+        let is_block_value_sizes_ext_stored = (fst_length & BLOCK_VALUE_SIZES_EXT_STORED_BIT) != 0;
+        let fst_length = fst_length & !BLOCK_VALUE_SIZES_EXT_STORED_BIT;
 
         let (fst_slice, block_addr_store_slice) = data.split(fst_length as usize);
         let fst_index = Fst::new(fst_slice)
@@ -154,9 +157,24 @@ impl SSTableIndexV3 {
                     VInt::deserialize_u64(&mut sizes_slice).map_err(|_| SSTableDataCorruption)?;
                 let positions_size =
                     VInt::deserialize_u64(&mut sizes_slice).map_err(|_| SSTableDataCorruption)?;
+
+                let (coalesced_postings_size, coalesced_positions_size) =
+                    if is_block_value_sizes_ext_stored {
+                        (
+                            VInt::deserialize_u64(&mut sizes_slice)
+                                .map_err(|_| SSTableDataCorruption)?,
+                            VInt::deserialize_u64(&mut sizes_slice)
+                                .map_err(|_| SSTableDataCorruption)?,
+                        )
+                    } else {
+                        (0, 0)
+                    };
+
                 block_sizes.push(BlockValueSizes {
                     postings_size,
                     positions_size,
+                    coalesced_postings_size,
+                    coalesced_positions_size,
                 });
             }
         }
@@ -174,10 +192,8 @@ impl SSTableIndexV3 {
     }
 
     /// Get the [`BlockValueSizes`] of the requested block.
-    pub(crate) fn get_block_sizes(&self, block_id: u64) -> Option<(u64, u64)> {
-        self.block_sizes
-            .get(block_id as usize)
-            .map(|sizes| (sizes.postings_size, sizes.positions_size))
+    pub(crate) fn get_block_sizes(&self, block_id: u64) -> Option<BlockValueSizes> {
+        self.block_sizes.get(block_id as usize).cloned()
     }
 
     /// Get the block id of the block that would contain `key`.
@@ -458,6 +474,8 @@ impl SSTableIndexBuilder {
                 if let Some(sizes) = &block.block_value_sizes {
                     VInt(sizes.postings_size).serialize_into_vec(&mut buf);
                     VInt(sizes.positions_size).serialize_into_vec(&mut buf);
+                    VInt(sizes.coalesced_postings_size).serialize_into_vec(&mut buf);
+                    VInt(sizes.coalesced_positions_size).serialize_into_vec(&mut buf);
                     wrt.write_all(&buf)?;
                     buf.clear();
                 } else {
@@ -475,13 +493,13 @@ impl SSTableIndexBuilder {
             }
         }
 
-        const BLOCK_VALUE_SIZES_STORED_BIT: u64 = 1u64 << 63;
         let fst_length_with_flag = if has_block_sizes {
             assert!(
-                written_bytes & BLOCK_VALUE_SIZES_STORED_BIT == 0,
-                "BLOCK_VALUE_SIZES_STORED_BIT already set in written_bytes"
+                (written_bytes & (BLOCK_VALUE_SIZES_STORED_BIT | BLOCK_VALUE_SIZES_EXT_STORED_BIT))
+                    == 0,
+                "value size bits already set in written_bytes"
             );
-            written_bytes | BLOCK_VALUE_SIZES_STORED_BIT
+            written_bytes | BLOCK_VALUE_SIZES_STORED_BIT | BLOCK_VALUE_SIZES_EXT_STORED_BIT
         } else {
             written_bytes
         };
@@ -1161,7 +1179,6 @@ mod tests {
         let fst_len = sstable_builder.serialize(&mut buffer).unwrap();
 
         // Verify the highest bit is NOT set when block_value_sizes is None
-        const BLOCK_VALUE_SIZES_STORED_BIT: u64 = 1u64 << 63;
         assert_eq!(fst_len & BLOCK_VALUE_SIZES_STORED_BIT, 0);
 
         let buffer = OwnedBytes::new(buffer);
@@ -1199,6 +1216,8 @@ mod tests {
             Some(BlockValueSizes {
                 postings_size: 100,
                 positions_size: 50,
+                coalesced_postings_size: 110,
+                coalesced_positions_size: 60,
             }),
         );
         sstable_builder.add_block(
@@ -1208,6 +1227,8 @@ mod tests {
             Some(BlockValueSizes {
                 postings_size: 200,
                 positions_size: 150,
+                coalesced_postings_size: 220,
+                coalesced_positions_size: 160,
             }),
         );
         sstable_builder.add_block(
@@ -1217,6 +1238,8 @@ mod tests {
             Some(BlockValueSizes {
                 postings_size: 300,
                 positions_size: 250,
+                coalesced_postings_size: 330,
+                coalesced_positions_size: 260,
             }),
         );
         sstable_builder.add_block(
@@ -1226,13 +1249,14 @@ mod tests {
             Some(BlockValueSizes {
                 postings_size: 400,
                 positions_size: 350,
+                coalesced_postings_size: 440,
+                coalesced_positions_size: 360,
             }),
         );
         let mut buffer: Vec<u8> = Vec::new();
         let fst_len = sstable_builder.serialize(&mut buffer).unwrap();
 
         // Verify the highest bit IS set when block_value_sizes is present
-        const BLOCK_VALUE_SIZES_STORED_BIT: u64 = 1u64 << 63;
         assert_ne!(fst_len & BLOCK_VALUE_SIZES_STORED_BIT, 0);
 
         let buffer = OwnedBytes::new(buffer);
@@ -1247,10 +1271,42 @@ mod tests {
             })
         );
 
-        assert_eq!(sstable_index.get_block_sizes(0), Some((100, 50)));
-        assert_eq!(sstable_index.get_block_sizes(1), Some((200, 150)));
-        assert_eq!(sstable_index.get_block_sizes(2), Some((300, 250)));
-        assert_eq!(sstable_index.get_block_sizes(3), Some((400, 350)));
+        assert_eq!(
+            sstable_index.get_block_sizes(0),
+            Some(BlockValueSizes {
+                postings_size: 100,
+                positions_size: 50,
+                coalesced_postings_size: 110,
+                coalesced_positions_size: 60,
+            })
+        );
+        assert_eq!(
+            sstable_index.get_block_sizes(1),
+            Some(BlockValueSizes {
+                postings_size: 200,
+                positions_size: 150,
+                coalesced_postings_size: 220,
+                coalesced_positions_size: 160,
+            })
+        );
+        assert_eq!(
+            sstable_index.get_block_sizes(2),
+            Some(BlockValueSizes {
+                postings_size: 300,
+                positions_size: 250,
+                coalesced_postings_size: 330,
+                coalesced_positions_size: 260,
+            })
+        );
+        assert_eq!(
+            sstable_index.get_block_sizes(3),
+            Some(BlockValueSizes {
+                postings_size: 400,
+                positions_size: 350,
+                coalesced_postings_size: 440,
+                coalesced_positions_size: 360,
+            })
+        );
 
         assert_eq!(sstable_index.locate_with_key(b"aaa"), Some(0));
         assert_eq!(sstable_index.locate_with_key(b"bbbbbbb"), Some(1));
@@ -1260,8 +1316,8 @@ mod tests {
 
     #[test]
     fn test_sstable_fst_length_encoding_roundtrip() {
-        // Tests that the highest bit encoding works correctly for round-trip serialization/deserialization
-        const BLOCK_VALUE_SIZES_STORED_BIT: u64 = 1u64 << 63;
+        // Tests that the highest bit encoding works correctly for round-trip
+        // serialization/deserialization
 
         // Test without block sizes (need at least 2 blocks for serialize to create an index)
         let mut builder_without = SSTableIndexBuilder::default();
@@ -1288,6 +1344,8 @@ mod tests {
             Some(BlockValueSizes {
                 postings_size: 123,
                 positions_size: 456,
+                coalesced_postings_size: 130,
+                coalesced_positions_size: 460,
             }),
         );
         builder_with.add_block(
@@ -1296,7 +1354,9 @@ mod tests {
             5u64,
             Some(BlockValueSizes {
                 postings_size: 789,
-                positions_size: 012,
+                positions_size: 12,
+                coalesced_postings_size: 800,
+                coalesced_positions_size: 20,
             }),
         );
         let mut buffer_with = Vec::new();
@@ -1305,14 +1365,30 @@ mod tests {
         // Verify bit IS set
         assert_ne!(fst_len_with & BLOCK_VALUE_SIZES_STORED_BIT, 0);
 
-        // Verify the actual fst_length (without the bit) is reasonable
-        let actual_fst_len = fst_len_with & !BLOCK_VALUE_SIZES_STORED_BIT;
+        // Verify the actual fst_length (without the bits) is reasonable
+        let actual_fst_len = fst_len_with & !(BLOCK_VALUE_SIZES_STORED_BIT | BLOCK_VALUE_SIZES_EXT_STORED_BIT);
         assert!(actual_fst_len > 0 && actual_fst_len < 1000); // reasonable size for this small test
 
         // Verify round-trip works
         let index_with = SSTableIndexV3::load(OwnedBytes::new(buffer_with), fst_len_with).unwrap();
-        assert_eq!(index_with.get_block_sizes(0), Some((123, 456)));
-        assert_eq!(index_with.get_block_sizes(1), Some((789, 12)));
+        assert_eq!(
+            index_with.get_block_sizes(0),
+            Some(BlockValueSizes {
+                postings_size: 123,
+                positions_size: 456,
+                coalesced_postings_size: 130,
+                coalesced_positions_size: 460,
+            })
+        );
+        assert_eq!(
+            index_with.get_block_sizes(1),
+            Some(BlockValueSizes {
+                postings_size: 789,
+                positions_size: 12,
+                coalesced_postings_size: 800,
+                coalesced_positions_size: 20,
+            })
+        );
     }
 
     #[test]
@@ -1339,6 +1415,8 @@ mod tests {
                 Some(BlockValueSizes {
                     postings_size: 100,
                     positions_size: 50,
+                    coalesced_postings_size: 110,
+                    coalesced_positions_size: 60,
                 }),
             );
             sstable_builder.add_block(
@@ -1348,6 +1426,8 @@ mod tests {
                 Some(BlockValueSizes {
                     postings_size: 200,
                     positions_size: 150,
+                    coalesced_postings_size: 220,
+                    coalesced_positions_size: 160,
                 }),
             );
             sstable_builder.serialize(&mut buffer_with_sizes).unwrap();

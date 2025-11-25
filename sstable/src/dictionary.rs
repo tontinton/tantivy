@@ -14,6 +14,7 @@ use tantivy_fst::Automaton;
 
 use crate::sstable_index_v3::SSTableIndexV3Empty;
 use crate::streamer::{Streamer, StreamerBuilder};
+use crate::value::BlockValueSizes;
 use crate::{
     BlockAddr, DeltaReader, Reader, SSTable, SSTableIndex, SSTableIndexV3, TermOrdinal, VoidSSTable,
 };
@@ -248,7 +249,7 @@ impl<TSSTable: SSTable> Dictionary<TSSTable> {
             .map(|block| block.byte_range)
     }
 
-    pub fn get_block_values_sizes(&self, block_id: u64) -> Option<(u64, u64)> {
+    pub fn get_block_values_sizes(&self, block_id: u64) -> Option<BlockValueSizes> {
         self.sstable_index.get_block_sizes(block_id)
     }
 
@@ -268,7 +269,7 @@ impl<TSSTable: SSTable> Dictionary<TSSTable> {
     pub fn block_value_sizes_for_automaton<'a>(
         &'a self,
         automaton: &'a impl Automaton,
-    ) -> impl Iterator<Item = (u64, Option<(u64, u64)>)> + 'a {
+    ) -> impl Iterator<Item = (u64, Option<BlockValueSizes>)> + 'a {
         self.sstable_index
             .get_block_for_automaton(automaton)
             .map(|(id, _)| (id, self.sstable_index.get_block_sizes(id)))

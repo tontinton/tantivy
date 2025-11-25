@@ -1,10 +1,12 @@
 use std::io;
 
 use common::json_path_writer::JSON_END_OF_PATH;
-use common::{BinarySerializable, OwnedBytes};
+use common::{BinarySerializable, OwnedBytes, MERGE_HOLES_UNDER_BYTES};
 use fnv::FnvHashSet;
 #[cfg(feature = "quickwit")]
 use futures_util::{FutureExt, StreamExt, TryStreamExt};
+#[cfg(feature = "quickwit")]
+use sstable::value::BlockValueSizes;
 #[cfg(feature = "quickwit")]
 use tantivy_fst::automaton::{AlwaysMatch, Automaton};
 
@@ -13,10 +15,6 @@ use crate::positions::PositionReader;
 use crate::postings::{BlockSegmentPostings, SegmentPostings, TermInfo};
 use crate::schema::{IndexRecordOption, Term, Type};
 use crate::termdict::TermDictionary;
-
-// merge holes under 4MiB, that's how many bytes we can hope to receive during a TTFB from
-// S3 (~80MiB/s, and 50ms latency)
-const MERGE_HOLES_UNDER_BYTES: usize = (80 * 1024 * 1024 * 50) / 1000;
 
 /// The inverted index reader is in charge of accessing
 /// the inverted index associated with a specific field.
@@ -569,7 +567,7 @@ impl InvertedIndexReader {
     }
 
     /// Get the (postings, positions) file sizes of a block (FST) found by a term.
-    pub fn postings_positions_sizes_for_term(&self, term: &Term) -> (u64, Option<(u64, u64)>) {
+    pub fn postings_positions_sizes_for_term(&self, term: &Term) -> (u64, Option<BlockValueSizes>) {
         self.terms()
             .block_value_sizes_for_key(term.serialized_value_bytes())
     }
@@ -620,7 +618,7 @@ impl InvertedIndexReader {
         &self,
         automaton: A,
         reverse: bool,
-    ) -> io::Result<Vec<(u64, Option<(u64, u64)>)>>
+    ) -> io::Result<Vec<(u64, Option<BlockValueSizes>)>>
     where
         A::State: Clone,
     {

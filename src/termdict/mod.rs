@@ -38,6 +38,8 @@ use std::io;
 
 use common::file_slice::FileSlice;
 use common::BinarySerializable;
+#[cfg(feature = "quickwit")]
+use sstable::value::BlockValueSizes;
 use tantivy_fst::Automaton;
 
 use self::termdict::{
@@ -203,7 +205,10 @@ impl TermDictionary {
 
     #[cfg(feature = "quickwit")]
     /// Returns the values sizes of the block found on the key passed as argument.
-    pub fn block_value_sizes_for_key<K: AsRef<[u8]>>(&self, key: K) -> (u64, Option<(u64, u64)>) {
+    pub fn block_value_sizes_for_key<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+    ) -> (u64, Option<BlockValueSizes>) {
         let Some(block_id) = self.0.get_block_for_key(key) else {
             return (0, None);
         };
@@ -227,7 +232,7 @@ impl TermDictionary {
     pub fn block_value_sizes_for_automaton<'a>(
         &'a self,
         automaton: &'a impl Automaton,
-    ) -> impl Iterator<Item = (u64, Option<(u64, u64)>)> + 'a {
+    ) -> impl Iterator<Item = (u64, Option<BlockValueSizes>)> + 'a {
         self.0.block_value_sizes_for_automaton(automaton)
     }
 }

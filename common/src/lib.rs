@@ -27,6 +27,10 @@ pub use vint::{
 };
 pub use writer::{AntiCallToken, CountingWriter, TerminatingWrite};
 
+// merge holes under 4MiB, that's how many bytes we can hope to receive during a TTFB from
+// S3 (~80MiB/s, and 50ms latency)
+pub const MERGE_HOLES_UNDER_BYTES: usize = (80 * 1024 * 1024 * 50) / 1000;
+
 /// Has length trait
 pub trait HasLen {
     /// Return length
