@@ -283,23 +283,24 @@ impl ValueWriter for TermInfoValueWriter {
     }
 
     fn block_value_sizes(&self) -> Option<BlockValueSizes> {
-        let postings_size = merged_ranges_size(
-            self.term_infos
-                .iter()
-                .map(|t| t.postings_range.clone())
-                .collect(),
-        );
+        let (postings_ranges, positions_ranges): (Vec<_>, Vec<_>) = self
+            .term_infos
+            .iter()
+            .map(|t| (t.postings_range.clone(), t.positions_range.clone()))
+            .unzip();
 
-        let positions_size = merged_ranges_size(
-            self.term_infos
-                .iter()
-                .map(|t| t.positions_range.clone())
-                .collect(),
-        );
+        let (postings_size, postings_range_start, postings_range_end) =
+            merged_ranges_size_and_boundaries(postings_ranges);
+        let (positions_size, positions_range_start, positions_range_end) =
+            merged_ranges_size_and_boundaries(positions_ranges);
 
         let mut block_sizes = self.block_sizes.clone();
         block_sizes.coalesced_postings_size = postings_size as u64;
         block_sizes.coalesced_positions_size = positions_size as u64;
+        block_sizes.postings_range_start = postings_range_start;
+        block_sizes.postings_range_end = postings_range_end;
+        block_sizes.positions_range_start = positions_range_start;
+        block_sizes.positions_range_end = positions_range_end;
         Some(block_sizes)
     }
 
@@ -309,9 +310,17 @@ impl ValueWriter for TermInfoValueWriter {
     }
 }
 
-fn merged_ranges_size(mut ranges: Vec<std::ops::Range<usize>>) -> usize {
+fn merged_ranges_size_and_boundaries(mut ranges: Vec<std::ops::Range<usize>>) -> (usize, u64, u64) {
+    if ranges.is_empty() {
+        return (0, 0, 0);
+    }
+
     ranges.sort_by_key(|r| r.start);
-    ranges
+
+    let range_start = ranges[0].start as u64;
+    let range_end = ranges.last().unwrap().end as u64;
+
+    let merged_size = ranges
         .into_iter()
         .coalesce(|first, second| {
             if first.end + MERGE_HOLES_UNDER_BYTES >= second.start {
@@ -321,7 +330,9 @@ fn merged_ranges_size(mut ranges: Vec<std::ops::Range<usize>>) -> usize {
             }
         })
         .map(|range| range.len())
-        .sum()
+        .sum();
+
+    (merged_size, range_start, range_end)
 }
 
 #[cfg(test)]
@@ -428,5 +439,46 @@ mod tests {
                 positions_range: 600..640,
             }
         );
+    }
+
+    #[test]
+    fn test_block_value_sizes_with_ranges() {
+        let mut term_info_writer = super::TermInfoValueWriter::default();
+
+        term_info_writer.write(&TermInfo {
+            doc_freq: 10u32,
+            postings_range: 200..250,
+            positions_range: 350..450,
+        });
+
+        term_info_writer.write(&TermInfo {
+            doc_freq: 20u32,
+            postings_range: 100..150,
+            positions_range: 200..250,
+        });
+
+        term_info_writer.write(&TermInfo {
+            doc_freq: 15u32,
+            postings_range: 350..400,
+            positions_range: 500..600,
+        });
+
+        let sizes = term_info_writer.block_value_sizes().unwrap();
+
+        assert_eq!(sizes.postings_range_start, 100);
+        assert_eq!(sizes.postings_range_end, 400);
+        assert_eq!(sizes.positions_range_start, 200);
+        assert_eq!(sizes.positions_range_end, 600);
+    }
+
+    #[test]
+    fn test_block_value_sizes_empty_term_infos() {
+        let term_info_writer = super::TermInfoValueWriter::default();
+        let sizes = term_info_writer.block_value_sizes().unwrap();
+
+        assert_eq!(sizes.postings_range_start, 0);
+        assert_eq!(sizes.postings_range_end, 0);
+        assert_eq!(sizes.positions_range_start, 0);
+        assert_eq!(sizes.positions_range_end, 0);
     }
 }

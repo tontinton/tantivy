@@ -11,6 +11,10 @@ pub struct BlockValueSizes {
     pub positions_size: u64,
     pub coalesced_postings_size: u64,
     pub coalesced_positions_size: u64,
+    pub postings_range_start: u64,
+    pub postings_range_end: u64,
+    pub positions_range_start: u64,
+    pub positions_range_end: u64,
 }
 
 /// `ValueReader` is a trait describing the contract of something

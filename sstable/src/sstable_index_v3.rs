@@ -13,6 +13,7 @@ use crate::{common_prefix_len, SSTableDataCorruption, TermOrdinal};
 
 const BLOCK_VALUE_SIZES_STORED_BIT: u64 = 1u64 << 63;
 const BLOCK_VALUE_SIZES_EXT_STORED_BIT: u64 = 1u64 << 62;
+const BLOCK_VALUE_RANGES_STORED_BIT: u64 = 1u64 << 61;
 
 #[derive(Debug, Clone)]
 pub enum SSTableIndex {
@@ -131,6 +132,8 @@ impl SSTableIndexV3 {
         let fst_length = fst_length & !BLOCK_VALUE_SIZES_STORED_BIT;
         let is_block_value_sizes_ext_stored = (fst_length & BLOCK_VALUE_SIZES_EXT_STORED_BIT) != 0;
         let fst_length = fst_length & !BLOCK_VALUE_SIZES_EXT_STORED_BIT;
+        let is_block_value_ranges_stored = (fst_length & BLOCK_VALUE_RANGES_STORED_BIT) != 0;
+        let fst_length = fst_length & !BLOCK_VALUE_RANGES_STORED_BIT;
 
         let (fst_slice, block_addr_store_slice) = data.split(fst_length as usize);
         let fst_index = Fst::new(fst_slice)
@@ -170,11 +173,35 @@ impl SSTableIndexV3 {
                         (0, 0)
                     };
 
+                let (
+                    postings_range_start,
+                    postings_range_end,
+                    positions_range_start,
+                    positions_range_end,
+                ) = if is_block_value_ranges_stored {
+                    (
+                        VInt::deserialize_u64(&mut sizes_slice)
+                            .map_err(|_| SSTableDataCorruption)?,
+                        VInt::deserialize_u64(&mut sizes_slice)
+                            .map_err(|_| SSTableDataCorruption)?,
+                        VInt::deserialize_u64(&mut sizes_slice)
+                            .map_err(|_| SSTableDataCorruption)?,
+                        VInt::deserialize_u64(&mut sizes_slice)
+                            .map_err(|_| SSTableDataCorruption)?,
+                    )
+                } else {
+                    (0, 0, 0, 0)
+                };
+
                 block_sizes.push(BlockValueSizes {
                     postings_size,
                     positions_size,
                     coalesced_postings_size,
                     coalesced_positions_size,
+                    postings_range_start,
+                    postings_range_end,
+                    positions_range_start,
+                    positions_range_end,
                 });
             }
         }
@@ -476,6 +503,11 @@ impl SSTableIndexBuilder {
                     VInt(sizes.positions_size).serialize_into_vec(&mut buf);
                     VInt(sizes.coalesced_postings_size).serialize_into_vec(&mut buf);
                     VInt(sizes.coalesced_positions_size).serialize_into_vec(&mut buf);
+                    VInt(sizes.postings_range_start).serialize_into_vec(&mut buf);
+                    VInt(sizes.postings_range_end).serialize_into_vec(&mut buf);
+                    VInt(sizes.positions_range_start).serialize_into_vec(&mut buf);
+                    VInt(sizes.positions_range_end).serialize_into_vec(&mut buf);
+
                     wrt.write_all(&buf)?;
                     buf.clear();
                 } else {
@@ -495,11 +527,17 @@ impl SSTableIndexBuilder {
 
         let fst_length_with_flag = if has_block_sizes {
             assert!(
-                (written_bytes & (BLOCK_VALUE_SIZES_STORED_BIT | BLOCK_VALUE_SIZES_EXT_STORED_BIT))
+                (written_bytes
+                    & (BLOCK_VALUE_SIZES_STORED_BIT
+                        | BLOCK_VALUE_SIZES_EXT_STORED_BIT
+                        | BLOCK_VALUE_RANGES_STORED_BIT))
                     == 0,
                 "value size bits already set in written_bytes"
             );
-            written_bytes | BLOCK_VALUE_SIZES_STORED_BIT | BLOCK_VALUE_SIZES_EXT_STORED_BIT
+            written_bytes
+                | BLOCK_VALUE_SIZES_STORED_BIT
+                | BLOCK_VALUE_SIZES_EXT_STORED_BIT
+                | BLOCK_VALUE_RANGES_STORED_BIT
         } else {
             written_bytes
         };
@@ -1218,6 +1256,10 @@ mod tests {
                 positions_size: 50,
                 coalesced_postings_size: 110,
                 coalesced_positions_size: 60,
+                postings_range_start: 0,
+                postings_range_end: 0,
+                positions_range_start: 0,
+                positions_range_end: 0,
             }),
         );
         sstable_builder.add_block(
@@ -1229,6 +1271,10 @@ mod tests {
                 positions_size: 150,
                 coalesced_postings_size: 220,
                 coalesced_positions_size: 160,
+                postings_range_start: 0,
+                postings_range_end: 0,
+                positions_range_start: 0,
+                positions_range_end: 0,
             }),
         );
         sstable_builder.add_block(
@@ -1240,6 +1286,10 @@ mod tests {
                 positions_size: 250,
                 coalesced_postings_size: 330,
                 coalesced_positions_size: 260,
+                postings_range_start: 0,
+                postings_range_end: 0,
+                positions_range_start: 0,
+                positions_range_end: 0,
             }),
         );
         sstable_builder.add_block(
@@ -1251,6 +1301,10 @@ mod tests {
                 positions_size: 350,
                 coalesced_postings_size: 440,
                 coalesced_positions_size: 360,
+                postings_range_start: 0,
+                postings_range_end: 0,
+                positions_range_start: 0,
+                positions_range_end: 0,
             }),
         );
         let mut buffer: Vec<u8> = Vec::new();
@@ -1278,6 +1332,10 @@ mod tests {
                 positions_size: 50,
                 coalesced_postings_size: 110,
                 coalesced_positions_size: 60,
+                postings_range_start: 0,
+                postings_range_end: 0,
+                positions_range_start: 0,
+                positions_range_end: 0,
             })
         );
         assert_eq!(
@@ -1287,6 +1345,10 @@ mod tests {
                 positions_size: 150,
                 coalesced_postings_size: 220,
                 coalesced_positions_size: 160,
+                postings_range_start: 0,
+                postings_range_end: 0,
+                positions_range_start: 0,
+                positions_range_end: 0,
             })
         );
         assert_eq!(
@@ -1296,6 +1358,10 @@ mod tests {
                 positions_size: 250,
                 coalesced_postings_size: 330,
                 coalesced_positions_size: 260,
+                postings_range_start: 0,
+                postings_range_end: 0,
+                positions_range_start: 0,
+                positions_range_end: 0,
             })
         );
         assert_eq!(
@@ -1305,6 +1371,10 @@ mod tests {
                 positions_size: 350,
                 coalesced_postings_size: 440,
                 coalesced_positions_size: 360,
+                postings_range_start: 0,
+                postings_range_end: 0,
+                positions_range_start: 0,
+                positions_range_end: 0,
             })
         );
 
@@ -1346,6 +1416,10 @@ mod tests {
                 positions_size: 456,
                 coalesced_postings_size: 130,
                 coalesced_positions_size: 460,
+                postings_range_start: 0,
+                postings_range_end: 0,
+                positions_range_start: 0,
+                positions_range_end: 0,
             }),
         );
         builder_with.add_block(
@@ -1357,17 +1431,21 @@ mod tests {
                 positions_size: 12,
                 coalesced_postings_size: 800,
                 coalesced_positions_size: 20,
+                postings_range_start: 0,
+                postings_range_end: 0,
+                positions_range_start: 0,
+                positions_range_end: 0,
             }),
         );
         let mut buffer_with = Vec::new();
         let fst_len_with = builder_with.serialize(&mut buffer_with).unwrap();
 
-        // Verify bit IS set
         assert_ne!(fst_len_with & BLOCK_VALUE_SIZES_STORED_BIT, 0);
-
-        // Verify the actual fst_length (without the bits) is reasonable
-        let actual_fst_len = fst_len_with & !(BLOCK_VALUE_SIZES_STORED_BIT | BLOCK_VALUE_SIZES_EXT_STORED_BIT);
-        assert!(actual_fst_len > 0 && actual_fst_len < 1000); // reasonable size for this small test
+        let actual_fst_len = fst_len_with
+            & !(BLOCK_VALUE_SIZES_STORED_BIT
+                | BLOCK_VALUE_SIZES_EXT_STORED_BIT
+                | BLOCK_VALUE_RANGES_STORED_BIT);
+        assert_eq!(actual_fst_len, 1000);
 
         // Verify round-trip works
         let index_with = SSTableIndexV3::load(OwnedBytes::new(buffer_with), fst_len_with).unwrap();
@@ -1378,6 +1456,10 @@ mod tests {
                 positions_size: 456,
                 coalesced_postings_size: 130,
                 coalesced_positions_size: 460,
+                postings_range_start: 0,
+                postings_range_end: 0,
+                positions_range_start: 0,
+                positions_range_end: 0,
             })
         );
         assert_eq!(
@@ -1387,6 +1469,10 @@ mod tests {
                 positions_size: 12,
                 coalesced_postings_size: 800,
                 coalesced_positions_size: 20,
+                postings_range_start: 0,
+                postings_range_end: 0,
+                positions_range_start: 0,
+                positions_range_end: 0,
             })
         );
     }
@@ -1417,6 +1503,10 @@ mod tests {
                     positions_size: 50,
                     coalesced_postings_size: 110,
                     coalesced_positions_size: 60,
+                    postings_range_start: 0,
+                    postings_range_end: 0,
+                    positions_range_start: 0,
+                    positions_range_end: 0,
                 }),
             );
             sstable_builder.add_block(
@@ -1428,11 +1518,72 @@ mod tests {
                     positions_size: 150,
                     coalesced_postings_size: 220,
                     coalesced_positions_size: 160,
+                    postings_range_start: 0,
+                    postings_range_end: 0,
+                    positions_range_start: 0,
+                    positions_range_end: 0,
                 }),
             );
             sstable_builder.serialize(&mut buffer_with_sizes).unwrap();
         }
 
         assert!(buffer_with_sizes.len() > buffer_without_sizes.len());
+    }
+
+    #[test]
+    fn test_sstable_with_block_value_ranges() {
+        let mut sstable_builder = SSTableIndexBuilder::default();
+
+        sstable_builder.add_block(
+            b"aaa",
+            10..20,
+            0u64,
+            Some(BlockValueSizes {
+                postings_size: 100,
+                positions_size: 50,
+                coalesced_postings_size: 110,
+                coalesced_positions_size: 60,
+                postings_range_start: 1000,
+                postings_range_end: 1100,
+                positions_range_start: 2000,
+                positions_range_end: 2050,
+            }),
+        );
+
+        sstable_builder.add_block(
+            b"bbb",
+            20..30,
+            5u64,
+            Some(BlockValueSizes {
+                postings_size: 200,
+                positions_size: 150,
+                coalesced_postings_size: 220,
+                coalesced_positions_size: 160,
+                postings_range_start: 3000,
+                postings_range_end: 3200,
+                positions_range_start: 4000,
+                positions_range_end: 4150,
+            }),
+        );
+
+        let mut buffer: Vec<u8> = Vec::new();
+        let fst_len = sstable_builder.serialize(&mut buffer).unwrap();
+
+        assert_ne!(fst_len & BLOCK_VALUE_RANGES_STORED_BIT, 0);
+
+        let buffer = OwnedBytes::new(buffer);
+        let sstable_index = SSTableIndexV3::load(buffer, fst_len).unwrap();
+
+        let sizes_0 = sstable_index.get_block_sizes(0).unwrap();
+        assert_eq!(sizes_0.postings_range_start, 1000);
+        assert_eq!(sizes_0.postings_range_end, 1100);
+        assert_eq!(sizes_0.positions_range_start, 2000);
+        assert_eq!(sizes_0.positions_range_end, 2050);
+
+        let sizes_1 = sstable_index.get_block_sizes(1).unwrap();
+        assert_eq!(sizes_1.postings_range_start, 3000);
+        assert_eq!(sizes_1.postings_range_end, 3200);
+        assert_eq!(sizes_1.positions_range_start, 4000);
+        assert_eq!(sizes_1.positions_range_end, 4150);
     }
 }
