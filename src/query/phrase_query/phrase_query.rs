@@ -22,7 +22,7 @@ use crate::schema::{Field, IndexRecordOption, Term};
 #[derive(Clone, Debug)]
 pub struct PhraseQuery {
     field: Field,
-    phrase_terms: Vec<(usize, Term)>,
+    phrase_terms: Vec<(usize, Term, bool)>,
     slop: u32,
     match_entire_field: bool,
 }
@@ -46,12 +46,27 @@ impl PhraseQuery {
     }
 
     /// Creates a new `PhraseQuery` given a list of terms, their offsets and a slop
-    pub fn new_with_offset_and_slop(mut terms: Vec<(usize, Term)>, slop: u32) -> PhraseQuery {
+    pub fn new_with_offset_and_slop(terms: Vec<(usize, Term)>, slop: u32) -> PhraseQuery {
+        Self::new_with_offset_slop_and_reverse(
+            terms
+                .into_iter()
+                .map(|(offset, term)| (offset, term, false))
+                .collect(),
+            slop,
+        )
+    }
+
+    /// Creates a new `PhraseQuery` given a list of terms, their offsets and a slop and whether to
+    /// use revterm
+    pub fn new_with_offset_slop_and_reverse(
+        mut terms: Vec<(usize, Term, bool)>,
+        slop: u32,
+    ) -> PhraseQuery {
         assert!(
             terms.len() > 1,
             "A phrase query is required to have strictly more than one term."
         );
-        terms.sort_by_key(|&(offset, _)| offset);
+        terms.sort_by_key(|&(offset, _, _)| offset);
         let field = terms[0].1.field();
         assert!(
             terms[1..].iter().all(|term| term.1.field() == field),
@@ -97,7 +112,7 @@ impl PhraseQuery {
     pub fn phrase_terms(&self) -> Vec<Term> {
         self.phrase_terms
             .iter()
-            .map(|(_, term)| term.clone())
+            .map(|(_, term, _)| term.clone())
             .collect::<Vec<Term>>()
     }
 
@@ -153,7 +168,7 @@ impl Query for PhraseQuery {
     }
 
     fn query_terms<'a>(&'a self, visitor: &mut dyn FnMut(&'a Term, bool)) {
-        for (_, term) in &self.phrase_terms {
+        for (_, term, _) in &self.phrase_terms {
             visitor(term, true);
         }
     }

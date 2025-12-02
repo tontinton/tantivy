@@ -9,7 +9,7 @@ use crate::schema::{IndexRecordOption, Term};
 use crate::{DocId, DocSet, Score};
 
 pub struct PhraseWeight {
-    phrase_terms: Vec<(usize, Term)>,
+    phrase_terms: Vec<(usize, Term, bool)>,
     similarity_weight_opt: Option<Bm25Weight>,
     slop: u32,
     match_entire_field: bool,
@@ -19,7 +19,7 @@ impl PhraseWeight {
     /// Creates a new phrase weight.
     /// If `similarity_weight_opt` is None, then scoring is disabled
     pub fn new(
-        phrase_terms: Vec<(usize, Term)>,
+        phrase_terms: Vec<(usize, Term, bool)>,
         similarity_weight_opt: Option<Bm25Weight>,
         match_entire_field: bool,
     ) -> PhraseWeight {
@@ -56,11 +56,15 @@ impl PhraseWeight {
             .map(|similarity_weight| similarity_weight.boost_by(boost));
         let fieldnorm_reader = self.fieldnorm_reader(reader)?;
         let mut term_postings_list = Vec::new();
-        for &(offset, ref term) in &self.phrase_terms {
-            if let Some(postings) = reader
-                .inverted_index(term.field())?
-                .read_postings(term, IndexRecordOption::WithFreqsAndPositions)?
-            {
+        for &(offset, ref term, reverse) in &self.phrase_terms {
+            let inverted_index = reader.inverted_index(term.field())?;
+            let option = IndexRecordOption::WithFreqsAndPositions;
+            let postings_opt = if reverse {
+                inverted_index.read_postings_from_revterm(term, option)?
+            } else {
+                inverted_index.read_postings(term, option)?
+            };
+            if let Some(postings) = postings_opt {
                 term_postings_list.push((offset, postings));
             } else {
                 return Ok(None);
