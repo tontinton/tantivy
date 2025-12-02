@@ -94,6 +94,12 @@ impl RegexPhraseQuery {
         slop: u32,
     ) -> RegexPhraseQuery {
         terms.sort_by_key(|&(offset, _, _)| offset);
+        let slop = if terms.len() == 1 {
+            // No need for computing slop when there's only 1 term to search
+            0
+        } else {
+            slop
+        };
         RegexPhraseQuery {
             field,
             phrase_terms: terms,
