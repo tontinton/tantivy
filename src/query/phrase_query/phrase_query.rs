@@ -25,6 +25,8 @@ pub struct PhraseQuery {
     phrase_terms: Vec<(usize, Term, bool)>,
     slop: u32,
     match_entire_field: bool,
+    must_start: bool,
+    must_end: bool,
 }
 
 impl PhraseQuery {
@@ -77,6 +79,8 @@ impl PhraseQuery {
             phrase_terms: terms,
             slop,
             match_entire_field: false,
+            must_start: false,
+            must_end: false,
         }
     }
 
@@ -101,6 +105,16 @@ impl PhraseQuery {
     /// Set whether the phrase must match the *entire* field content exactly.
     pub fn set_match_entire_field(&mut self, value: bool) {
         self.match_entire_field = value;
+    }
+
+    /// Whether field's value must start with phrase query.
+    pub fn set_must_start(&mut self, value: bool) {
+        self.must_start = value;
+    }
+
+    /// Whether the field's value must end with phrase query.
+    pub fn set_must_end(&mut self, value: bool) {
+        self.must_end = value;
     }
 
     /// The [`Field`] this `PhraseQuery` is targeting.
@@ -150,6 +164,8 @@ impl PhraseQuery {
             self.phrase_terms.clone(),
             bm25_weight_opt,
             self.match_entire_field,
+            self.must_start,
+            self.must_end,
         );
         if self.slop > 0 {
             weight.slop(self.slop);

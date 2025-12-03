@@ -13,6 +13,8 @@ pub struct PhraseWeight {
     similarity_weight_opt: Option<Bm25Weight>,
     slop: u32,
     match_entire_field: bool,
+    must_start: bool,
+    must_end: bool,
 }
 
 impl PhraseWeight {
@@ -22,6 +24,8 @@ impl PhraseWeight {
         phrase_terms: Vec<(usize, Term, bool)>,
         similarity_weight_opt: Option<Bm25Weight>,
         match_entire_field: bool,
+        must_start: bool,
+        must_end: bool,
     ) -> PhraseWeight {
         let slop = 0;
         PhraseWeight {
@@ -29,6 +33,8 @@ impl PhraseWeight {
             similarity_weight_opt,
             slop,
             match_entire_field,
+            must_start,
+            must_end,
         }
     }
 
@@ -78,12 +84,15 @@ impl PhraseWeight {
                 fieldnorm_reader,
             )))
         } else {
+            let flags = PhraseScorerFlags::default()
+                .with(PhraseScorerFlags::MUST_START, self.must_start)
+                .with(PhraseScorerFlags::MUST_END, self.must_end);
             Ok(Some(PhraseScorer::new(
                 term_postings_list,
                 similarity_weight_opt,
                 fieldnorm_reader,
                 self.slop,
-                PhraseScorerFlags::default(),
+                flags,
             )))
         }
     }
