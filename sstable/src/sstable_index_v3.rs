@@ -257,14 +257,68 @@ impl SSTableIndexV3 {
     ) -> impl Iterator<Item = (u64, BlockAddr)> + 'a {
         // this is more complicated than other index formats: we don't have a ready made list of
         // blocks, and instead need to stream-decode the sstable.
+        let min_key = compute_automaton_min_key(automaton);
+
+        let (streamer, prev_key) = if min_key.is_empty() {
+            (self.fst_index.stream(), None)
+        } else {
+            let streamer = self.fst_index.range().ge(&min_key).into_stream();
+            // Decrement min_key as conservative lower bound for first block
+            let prev_key = Some(decrement_key(min_key));
+            (streamer, prev_key)
+        };
 
         GetBlockForAutomaton {
-            streamer: self.fst_index.stream(),
+            streamer,
             block_addr_store: &self.block_addr_store,
-            prev_key: None,
+            prev_key,
             automaton,
         }
     }
+}
+
+fn decrement_key(mut key: Vec<u8>) -> Vec<u8> {
+    if let Some(last) = key.last_mut() {
+        if *last > 0 {
+            *last -= 1;
+        } else {
+            key.pop();
+        }
+    }
+    key
+}
+
+/// Finds the longest prefix where only one byte leads to a `can_match` state at each position.
+/// E.g., for a prefix automaton "abc", returns "abc". For a union "ab|cd", returns "".
+fn compute_automaton_min_key<A: Automaton>(automaton: &A) -> Vec<u8> {
+    let mut result = Vec::new();
+    let mut state = automaton.start();
+
+    // Set upper bound to not loop forever
+    for _ in 0..256 {
+        if automaton.will_always_match(&state) || automaton.is_match(&state) {
+            break;
+        }
+
+        let mut matching_byte = None;
+        for b in 0u8..=255 {
+            let next_state = automaton.accept(&state, b);
+            if automaton.can_match(&next_state) {
+                if matching_byte.is_some() {
+                    return result;
+                }
+                matching_byte = Some(b);
+            }
+        }
+
+        let Some(b) = matching_byte else {
+            break;
+        };
+        result.push(b);
+        state = automaton.accept(&state, b);
+    }
+
+    result
 }
 
 // TODO we iterate over the entire Map to find matching blocks,
