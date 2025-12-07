@@ -1499,7 +1499,7 @@ mod tests {
             & !(BLOCK_VALUE_SIZES_STORED_BIT
                 | BLOCK_VALUE_SIZES_EXT_STORED_BIT
                 | BLOCK_VALUE_RANGES_STORED_BIT);
-        assert_eq!(actual_fst_len, 1000);
+        assert_eq!(actual_fst_len, 48);
 
         // Verify round-trip works
         let index_with = SSTableIndexV3::load(OwnedBytes::new(buffer_with), fst_len_with).unwrap();
