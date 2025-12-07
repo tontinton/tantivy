@@ -120,7 +120,7 @@ impl<TSSTable: SSTable> Dictionary<TSSTable> {
                     self.sstable_slice
                         .read_bytes_slice_async(block_addr.byte_range)
                 })
-                .buffered(5)
+                .buffered(50)
                 .try_collect::<Vec<_>>()
                 .await?;
             Ok(DeltaReader::from_multiple_blocks(data))

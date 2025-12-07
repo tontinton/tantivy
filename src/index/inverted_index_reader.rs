@@ -501,7 +501,7 @@ impl InvertedIndexReader {
                     .read_bytes_slice_async(posting_slice)
                     .map(|result| result.map(|_slice| ()))
             })
-            .buffer_unordered(5)
+            .buffer_unordered(50)
             .try_collect::<Vec<()>>();
         let positions_downloader = positions_ranges_to_load_stream
             .map(|positions_slice| {
@@ -509,7 +509,7 @@ impl InvertedIndexReader {
                     .read_bytes_slice_async(positions_slice)
                     .map(|result| result.map(|_slice| ()))
             })
-            .buffer_unordered(5)
+            .buffer_unordered(50)
             .try_collect::<Vec<()>>();
 
         let (_, posting_slices_downloaded, positions_slices_downloaded) =
