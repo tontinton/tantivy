@@ -176,3 +176,6 @@ harness = false
 [[bench]]
 name = "and_or_queries"
 harness = false
+[[bench]]
+name = "regex_phrase_query"
+harness = false
