@@ -8,7 +8,9 @@ use crate::postings::{LoadedPostings, Postings, SegmentPostings, TermInfo};
 use crate::query::bm25::Bm25Weight;
 use crate::query::explanation::does_not_match;
 use crate::query::union::{BitSetPostingUnion, SimpleUnion};
-use crate::query::{AutomatonWeight, BitSetDocSet, EmptyScorer, Explanation, Scorer, Weight};
+use crate::query::{
+    AutomatonWeight, BitSetDocSet, ConstScorer, EmptyScorer, Explanation, Scorer, Weight,
+};
 use crate::schema::{Field, IndexRecordOption, Term, Type};
 use crate::{DocId, DocSet, InvertedIndexReader, Score};
 
@@ -318,6 +320,35 @@ impl RegexPhraseWeight {
 
 impl Weight for RegexPhraseWeight {
     fn scorer(&self, reader: &SegmentReader, boost: Score) -> crate::Result<Box<dyn Scorer>> {
+        // Fast path for single-term queries without must_start/must_end.
+        // Skips loading positions data entirely.
+        if self.phrase_terms.len() == 1 && !self.must_start && !self.must_end {
+            let (_, ref term, reverse) = self.phrase_terms[0];
+            let mut automaton = Self::term_to_regex_automaton(term)?;
+            if reverse {
+                automaton.set_reverse();
+            }
+            let term_infos = automaton.get_match_term_infos(reader)?;
+            if term_infos.is_empty() {
+                return Ok(Box::new(EmptyScorer));
+            }
+            if term_infos.len() > self.max_expansions as usize {
+                return Err(crate::TantivyError::InvalidArgument(format!(
+                    "Phrase query exceeded max expansions {}",
+                    term_infos.len()
+                )));
+            }
+            let inverted_index = reader.inverted_index(self.field)?;
+            let mut doc_bitset = BitSet::with_max_value(reader.max_doc());
+            for term_info in &term_infos {
+                Self::add_to_bitset(&inverted_index, term_info, &mut doc_bitset)?;
+            }
+            return Ok(Box::new(ConstScorer::new(
+                BitSetDocSet::from(doc_bitset),
+                boost,
+            )));
+        }
+
         if let Some(scorer) = self.phrase_scorer(reader, boost)? {
             Ok(Box::new(scorer))
         } else {
@@ -351,7 +382,7 @@ mod tests {
 
     use super::super::tests::create_index;
     use crate::docset::TERMINATED;
-    use crate::query::{wildcard_query_to_regex_str, EnableScoring, RegexPhraseQuery};
+    use crate::query::{wildcard_query_to_regex_str, EnableScoring, RegexPhraseQuery, Weight};
     use crate::DocSet;
 
     proptest! {
@@ -516,6 +547,33 @@ mod tests {
         assert_eq!(phrase_scorer.doc(), 0);
         assert_eq!(phrase_scorer.phrase_count(), 1);
         assert_eq!(phrase_scorer.advance(), TERMINATED);
+        Ok(())
+    }
+
+    #[test]
+    pub fn test_single_term_regex() -> crate::Result<()> {
+        let index = create_index(&["hello world", "foo bar", "hello foo"])?;
+        let schema = index.schema();
+        let text_field = schema.get_field("text").unwrap();
+        let searcher = index.reader()?.searcher();
+
+        let phrase_query = RegexPhraseQuery::new(text_field, vec!["hel.*".into()]);
+        let enable_scoring = EnableScoring::enabled_from_searcher(&searcher);
+        let phrase_weight = phrase_query.regex_phrase_weight(enable_scoring).unwrap();
+        let mut scorer = phrase_weight.scorer(searcher.segment_reader(0u32), 1.0)?;
+        assert_eq!(scorer.doc(), 0);
+        assert_eq!(scorer.advance(), 2);
+        assert_eq!(scorer.advance(), TERMINATED);
+
+        let phrase_query =
+            RegexPhraseQuery::new(text_field, vec![wildcard_query_to_regex_str("*oo")]);
+        let enable_scoring = EnableScoring::enabled_from_searcher(&searcher);
+        let phrase_weight = phrase_query.regex_phrase_weight(enable_scoring).unwrap();
+        let mut scorer = phrase_weight.scorer(searcher.segment_reader(0u32), 1.0)?;
+        assert_eq!(scorer.doc(), 1);
+        assert_eq!(scorer.advance(), 2);
+        assert_eq!(scorer.advance(), TERMINATED);
+
         Ok(())
     }
 }
