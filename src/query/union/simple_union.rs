@@ -57,14 +57,30 @@ impl<TDocSet: Postings> Postings for SimpleUnion<TDocSet> {
     }
 
     fn append_positions_with_offset(&mut self, offset: u32, output: &mut Vec<u32>) {
+        let initial_len = output.len();
+        let mut num_contributing = 0u32;
         for docset in &mut self.docsets {
-            let doc = docset.doc();
-            if doc == self.doc {
+            if docset.doc() == self.doc {
                 docset.append_positions_with_offset(offset, output);
+                num_contributing += 1;
             }
         }
-        output.sort_unstable();
-        output.dedup();
+
+        // Only sort/dedup if multiple docsets contributed positions
+        // Single docset's positions are already sorted
+        if num_contributing > 1 {
+            output[initial_len..].sort_unstable();
+            if output.len() > initial_len + 1 {
+                let mut write = initial_len;
+                for read in (initial_len + 1)..output.len() {
+                    if output[read] != output[write] {
+                        write += 1;
+                        output[write] = output[read];
+                    }
+                }
+                output.truncate(write + 1);
+            }
+        }
     }
 }
 
