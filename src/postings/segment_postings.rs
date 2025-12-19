@@ -272,11 +272,8 @@ impl Postings for SegmentPostings {
                 !self.block_cursor.freqs().is_empty(),
                 "No positions available"
             );
-            let read_offset = self.block_cursor.position_offset()
-                + (self.block_cursor.freqs()[..self.cur]
-                    .iter()
-                    .cloned()
-                    .sum::<u32>() as u64);
+            let freq_sum = self.block_cursor.cumulative_freq(self.cur);
+            let read_offset = self.block_cursor.position_offset() + (freq_sum as u64);
             // TODO: instead of zeroing the output, we could use MaybeUninit or similar.
             output.resize(prev_len + term_freq as usize, 0u32);
             position_reader.read(read_offset, &mut output[prev_len..]);
