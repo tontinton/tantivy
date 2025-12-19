@@ -67,19 +67,17 @@ impl DocSet for BitSetDocSet {
             self.doc = TERMINATED;
             return TERMINATED;
         }
+        if self.doc >= target {
+            return self.doc;
+        }
         let target_bucket = target / 64u32;
+        // We know self.doc < target, so target_bucket >= cursor_bucket
         if target_bucket > self.cursor_bucket {
             self.go_to_bucket(target_bucket);
-            let greater_filter: TinySet = TinySet::range_greater_or_equal(target);
-            self.cursor_tinybitset = self.cursor_tinybitset.intersect(greater_filter);
-            self.advance()
-        } else {
-            let mut doc = self.doc();
-            while doc < target {
-                doc = self.advance();
-            }
-            doc
         }
+        let greater_filter: TinySet = TinySet::range_greater_or_equal(target);
+        self.cursor_tinybitset = self.cursor_tinybitset.intersect(greater_filter);
+        self.advance()
     }
 
     /// Returns the current document
