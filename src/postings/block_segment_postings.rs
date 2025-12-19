@@ -31,6 +31,8 @@ pub struct BlockSegmentPostings {
     doc_freq: u32,
     data: OwnedBytes,
     skip_reader: SkipReader,
+    /// Precomputed cumulative frequency sums for O(1) position offset lookup.
+    cumulative_freqs: [u32; COMPRESSION_BLOCK_SIZE],
 }
 
 fn decode_bitpacked_block(
@@ -134,6 +136,7 @@ impl BlockSegmentPostings {
             doc_freq,
             data: postings_data,
             skip_reader,
+            cumulative_freqs: [0u32; COMPRESSION_BLOCK_SIZE],
         };
         block_segment_postings.load_block();
         Ok(block_segment_postings)
@@ -247,6 +250,13 @@ impl BlockSegmentPostings {
         self.freq_decoder.output(idx)
     }
 
+    /// Return the cumulative frequency sum up to (but not including) index `idx`.
+    #[inline]
+    pub fn cumulative_freq(&self, idx: usize) -> u32 {
+        debug_assert!(self.block_is_loaded());
+        self.cumulative_freqs[idx]
+    }
+
     /// Returns the length of the current block.
     ///
     /// All blocks have a length of `NUM_DOCS_PER_BLOCK`,
@@ -349,6 +359,16 @@ impl BlockSegmentPostings {
                 );
             }
         }
+
+        if let FreqReadingOption::ReadFreq = self.freq_reading_option {
+            let freqs = self.freq_decoder.output_array();
+            let mut cumsum = 0u32;
+            for (i, &freq) in freqs.iter().enumerate() {
+                self.cumulative_freqs[i] = cumsum;
+                cumsum += freq;
+            }
+        }
+
         self.block_loaded = true;
     }
 
@@ -371,6 +391,7 @@ impl BlockSegmentPostings {
             doc_freq: 0,
             data: OwnedBytes::empty(),
             skip_reader: SkipReader::new(OwnedBytes::empty(), 0, IndexRecordOption::Basic),
+            cumulative_freqs: [0u32; COMPRESSION_BLOCK_SIZE],
         }
     }
 
