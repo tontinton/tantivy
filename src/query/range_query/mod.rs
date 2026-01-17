@@ -1,6 +1,6 @@
 use crate::schema::Type;
 
-mod fast_field_range_doc_set;
+pub(crate) mod fast_field_range_doc_set;
 mod range_query;
 mod range_query_fastfield;
 

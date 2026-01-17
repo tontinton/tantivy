@@ -167,3 +167,8 @@ harness = false
 [[bench]]
 name = "agg_bench"
 harness = false
+
+[[bench]]
+name = "str_eq_bench"
+harness = false
+
