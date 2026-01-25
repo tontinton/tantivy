@@ -5,8 +5,9 @@
 //! Unlike AVX-512, NEON doesn't have a compress instruction, so we use
 //! a lookup table approach similar to AVX2.
 use std::arch::aarch64::{
-    uint32x4_t, vaddq_u32, vandq_u32, vcgeq_u32, vcleq_u32, vdupq_n_u32, veorq_u32, vgetq_lane_u32,
-    vld1q_u32, vqtbl1q_u8, vreinterpretq_u32_u8, vreinterpretq_u8_u32, vst1q_u32,
+    int32x4_t, uint32x4_t, vaddq_u32, vandq_u32, vcgeq_s32, vcleq_s32, vdupq_n_s32, vdupq_n_u32,
+    veorq_u32, vgetq_lane_u32, vld1q_u32, vqtbl1q_u8, vreinterpretq_s32_u32, vreinterpretq_u32_u8,
+    vreinterpretq_u8_u32, vst1q_u32,
 };
 use std::ops::RangeInclusive;
 
@@ -54,8 +55,8 @@ unsafe fn filter_vec_neon_aux(
     num_words: usize,
 ) -> usize {
     let mut output_tail = output;
-    let range_start = vdupq_n_u32(*range.start());
-    let range_end = vdupq_n_u32(*range.end());
+    let range_start = vdupq_n_s32(*range.start() as i32);
+    let range_end = vdupq_n_s32(*range.end() as i32);
     let mut ids = from_u32x4([offset, offset + 1, offset + 2, offset + 3]);
     let shift = vdupq_n_u32(NUM_LANES as u32);
 
@@ -77,11 +78,12 @@ unsafe fn filter_vec_neon_aux(
 #[target_feature(enable = "neon")]
 unsafe fn compute_filter_bitset(
     val: uint32x4_t,
-    range_start: uint32x4_t,
-    range_end: uint32x4_t,
+    range_start: int32x4_t,
+    range_end: int32x4_t,
 ) -> u8 {
-    let ge_start = vcgeq_u32(val, range_start);
-    let le_end = vcleq_u32(val, range_end);
+    let val_signed = vreinterpretq_s32_u32(val);
+    let ge_start = vcgeq_s32(val_signed, range_start);
+    let le_end = vcleq_s32(val_signed, range_end);
     let inside = vandq_u32(ge_start, le_end);
     mask_to_bitset(inside)
 }
