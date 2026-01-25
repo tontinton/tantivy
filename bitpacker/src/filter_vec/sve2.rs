@@ -19,6 +19,11 @@ fn u32_to_i32_scalar(val: u32) -> u32 {
 }
 
 pub fn filter_vec_in_place(range: RangeInclusive<u32>, offset: u32, output: &mut Vec<u32>) {
+    unsafe { filter_vec_in_place_impl(range, offset, output) }
+}
+
+#[target_feature(enable = "sve2")]
+unsafe fn filter_vec_in_place_impl(range: RangeInclusive<u32>, offset: u32, output: &mut Vec<u32>) {
     let range_transformed = u32_to_i32_scalar(*range.start())..=u32_to_i32_scalar(*range.end());
 
     let vl = sve_cntw();
@@ -27,16 +32,14 @@ pub fn filter_vec_in_place(range: RangeInclusive<u32>, offset: u32, output: &mut
     }
 
     let num_words = output.len() / vl;
-    let mut output_len = unsafe {
-        filter_vec_sve_aux(
-            output.as_ptr(),
-            range_transformed,
-            output.as_mut_ptr(),
-            offset,
-            num_words,
-            vl,
-        )
-    };
+    let mut output_len = filter_vec_sve_aux(
+        output.as_ptr(),
+        range_transformed,
+        output.as_mut_ptr(),
+        offset,
+        num_words,
+        vl,
+    );
 
     let remainder_start = num_words * vl;
     for i in remainder_start..output.len() {
@@ -48,15 +51,14 @@ pub fn filter_vec_in_place(range: RangeInclusive<u32>, offset: u32, output: &mut
 }
 
 #[inline]
-fn sve_cntw() -> usize {
+#[target_feature(enable = "sve2")]
+unsafe fn sve_cntw() -> usize {
     let count: usize;
-    unsafe {
-        asm!(
-            "cntw {out}",
-            out = out(reg) count,
-            options(pure, nomem, nostack)
-        );
-    }
+    asm!(
+        "cntw {out}",
+        out = out(reg) count,
+        options(pure, nomem, nostack)
+    );
     count
 }
 
