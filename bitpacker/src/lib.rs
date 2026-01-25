@@ -10,6 +10,8 @@ pub use crate::blocked_bitpacker::BlockedBitpacker;
 pub use crate::filter_vec::filter_vec_in_place_avx2;
 #[cfg(target_arch = "x86_64")]
 pub use crate::filter_vec::filter_vec_in_place_avx512;
+#[cfg(target_arch = "aarch64")]
+pub use crate::filter_vec::filter_vec_in_place_sve2;
 pub use crate::filter_vec::{filter_vec_in_place, filter_vec_in_place_scalar};
 
 /// Computes the number of bits that will be used for bitpacking.

@@ -6,6 +6,8 @@ mod avx2;
 mod avx512;
 #[cfg(target_arch = "aarch64")]
 mod neon;
+#[cfg(target_arch = "aarch64")]
+mod sve2;
 
 mod scalar;
 
@@ -17,6 +19,9 @@ pub use avx512::filter_vec_in_place as filter_vec_in_place_avx512;
 #[allow(unused_imports)]
 pub use neon::filter_vec_in_place as filter_vec_in_place_neon;
 pub use scalar::filter_vec_in_place as filter_vec_in_place_scalar;
+#[cfg(target_arch = "aarch64")]
+#[allow(unused_imports)]
+pub use sve2::filter_vec_in_place as filter_vec_in_place_sve2;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 #[repr(u8)]
@@ -25,6 +30,8 @@ enum FilterImplPerInstructionSet {
     AVX512 = 0u8,
     #[cfg(target_arch = "x86_64")]
     AVX2 = 1u8,
+    #[cfg(target_arch = "aarch64")]
+    Sve2 = 0u8,
     #[cfg(target_arch = "aarch64")]
     Neon = 1u8,
     Scalar = 2u8,
@@ -38,6 +45,8 @@ impl FilterImplPerInstructionSet {
             FilterImplPerInstructionSet::AVX512 => is_x86_feature_detected!("avx512f"),
             #[cfg(target_arch = "x86_64")]
             FilterImplPerInstructionSet::AVX2 => is_x86_feature_detected!("avx2"),
+            #[cfg(target_arch = "aarch64")]
+            FilterImplPerInstructionSet::Sve2 => std::arch::is_aarch64_feature_detected!("sve2"),
             #[cfg(target_arch = "aarch64")]
             FilterImplPerInstructionSet::Neon => std::arch::is_aarch64_feature_detected!("neon"),
             FilterImplPerInstructionSet::Scalar => true,
@@ -54,7 +63,8 @@ const IMPLS: [FilterImplPerInstructionSet; 3] = [
 ];
 
 #[cfg(target_arch = "aarch64")]
-const IMPLS: [FilterImplPerInstructionSet; 2] = [
+const IMPLS: [FilterImplPerInstructionSet; 3] = [
+    FilterImplPerInstructionSet::Sve2,
     FilterImplPerInstructionSet::Neon,
     FilterImplPerInstructionSet::Scalar,
 ];
@@ -77,6 +87,9 @@ impl FilterImplPerInstructionSet {
         }
         #[cfg(target_arch = "aarch64")]
         {
+            if code == FilterImplPerInstructionSet::Sve2 as u8 {
+                return FilterImplPerInstructionSet::Sve2;
+            }
             if code == FilterImplPerInstructionSet::Neon as u8 {
                 return FilterImplPerInstructionSet::Neon;
             }
@@ -93,6 +106,8 @@ impl FilterImplPerInstructionSet {
             }
             #[cfg(target_arch = "x86_64")]
             FilterImplPerInstructionSet::AVX2 => avx2::filter_vec_in_place(range, offset, output),
+            #[cfg(target_arch = "aarch64")]
+            FilterImplPerInstructionSet::Sve2 => sve2::filter_vec_in_place(range, offset, output),
             #[cfg(target_arch = "aarch64")]
             FilterImplPerInstructionSet::Neon => neon::filter_vec_in_place(range, offset, output),
             FilterImplPerInstructionSet::Scalar => {
@@ -208,6 +223,14 @@ mod tests {
         }
     }
 
+    #[test]
+    #[cfg(target_arch = "aarch64")]
+    fn test_filter_implementation_sve2() {
+        if FilterImplPerInstructionSet::Sve2.is_available() {
+            test_filter_impl_test_suite(FilterImplPerInstructionSet::Sve2);
+        }
+    }
+
     #[cfg(target_arch = "x86_64")]
     proptest::proptest! {
         #[test]
@@ -253,6 +276,23 @@ mod tests {
             if FilterImplPerInstructionSet::Neon.is_available() {
                 let mut vals_clone = vals.clone();
                 FilterImplPerInstructionSet::Neon.filter_vec_in_place(start..=end, offset, &mut vals);
+                FilterImplPerInstructionSet::Scalar.filter_vec_in_place(start..=end, offset, &mut vals_clone);
+                assert_eq!(&vals, &vals_clone);
+            }
+       }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    proptest::proptest! {
+        #[test]
+        fn test_filter_compare_scalar_and_sve2_impl_proptest(
+            start in proptest::prelude::any::<u32>(),
+            end in proptest::prelude::any::<u32>(),
+            offset in 0u32..2u32,
+            mut vals in proptest::collection::vec(0..u32::MAX, 0..30)) {
+            if FilterImplPerInstructionSet::Sve2.is_available() {
+                let mut vals_clone = vals.clone();
+                FilterImplPerInstructionSet::Sve2.filter_vec_in_place(start..=end, offset, &mut vals);
                 FilterImplPerInstructionSet::Scalar.filter_vec_in_place(start..=end, offset, &mut vals_clone);
                 assert_eq!(&vals, &vals_clone);
             }
