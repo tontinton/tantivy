@@ -2,21 +2,33 @@ use std::ops::RangeInclusive;
 
 #[cfg(target_arch = "x86_64")]
 mod avx2;
+#[cfg(target_arch = "x86_64")]
+mod avx512;
 
 mod scalar;
+
+#[cfg(target_arch = "x86_64")]
+pub use avx2::filter_vec_in_place as filter_vec_in_place_avx2;
+#[cfg(target_arch = "x86_64")]
+pub use avx512::filter_vec_in_place as filter_vec_in_place_avx512;
+pub use scalar::filter_vec_in_place as filter_vec_in_place_scalar;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 #[repr(u8)]
 enum FilterImplPerInstructionSet {
     #[cfg(target_arch = "x86_64")]
-    AVX2 = 0u8,
-    Scalar = 1u8,
+    AVX512 = 0u8,
+    #[cfg(target_arch = "x86_64")]
+    AVX2 = 1u8,
+    Scalar = 2u8,
 }
 
 impl FilterImplPerInstructionSet {
     #[inline]
     pub fn is_available(&self) -> bool {
         match *self {
+            #[cfg(target_arch = "x86_64")]
+            FilterImplPerInstructionSet::AVX512 => is_x86_feature_detected!("avx512f"),
             #[cfg(target_arch = "x86_64")]
             FilterImplPerInstructionSet::AVX2 => is_x86_feature_detected!("avx2"),
             FilterImplPerInstructionSet::Scalar => true,
@@ -26,7 +38,8 @@ impl FilterImplPerInstructionSet {
 
 // List of available implementation in preferred order.
 #[cfg(target_arch = "x86_64")]
-const IMPLS: [FilterImplPerInstructionSet; 2] = [
+const IMPLS: [FilterImplPerInstructionSet; 3] = [
+    FilterImplPerInstructionSet::AVX512,
     FilterImplPerInstructionSet::AVX2,
     FilterImplPerInstructionSet::Scalar,
 ];
@@ -39,8 +52,13 @@ impl FilterImplPerInstructionSet {
     #[allow(unused_variables)] // on non-x86_64, code is unused.
     fn from(code: u8) -> FilterImplPerInstructionSet {
         #[cfg(target_arch = "x86_64")]
-        if code == FilterImplPerInstructionSet::AVX2 as u8 {
-            return FilterImplPerInstructionSet::AVX2;
+        {
+            if code == FilterImplPerInstructionSet::AVX512 as u8 {
+                return FilterImplPerInstructionSet::AVX512;
+            }
+            if code == FilterImplPerInstructionSet::AVX2 as u8 {
+                return FilterImplPerInstructionSet::AVX2;
+            }
         }
         FilterImplPerInstructionSet::Scalar
     }
@@ -48,6 +66,10 @@ impl FilterImplPerInstructionSet {
     #[inline]
     fn filter_vec_in_place(self, range: RangeInclusive<u32>, offset: u32, output: &mut Vec<u32>) {
         match self {
+            #[cfg(target_arch = "x86_64")]
+            FilterImplPerInstructionSet::AVX512 => {
+                avx512::filter_vec_in_place(range, offset, output)
+            }
             #[cfg(target_arch = "x86_64")]
             FilterImplPerInstructionSet::AVX2 => avx2::filter_vec_in_place(range, offset, output),
             FilterImplPerInstructionSet::Scalar => {
@@ -94,6 +116,7 @@ mod tests {
     #[test]
     fn test_instruction_set_to_code_from_code() {
         for instruction_set in [
+            FilterImplPerInstructionSet::AVX512,
             FilterImplPerInstructionSet::AVX2,
             FilterImplPerInstructionSet::Scalar,
         ] {
@@ -135,6 +158,14 @@ mod tests {
 
     #[test]
     #[cfg(target_arch = "x86_64")]
+    fn test_filter_implementation_avx512() {
+        if FilterImplPerInstructionSet::AVX512.is_available() {
+            test_filter_impl_test_suite(FilterImplPerInstructionSet::AVX512);
+        }
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
     fn test_filter_implementation_avx2() {
         if FilterImplPerInstructionSet::AVX2.is_available() {
             test_filter_impl_test_suite(FilterImplPerInstructionSet::AVX2);
@@ -144,6 +175,23 @@ mod tests {
     #[test]
     fn test_filter_implementation_scalar() {
         test_filter_impl_test_suite(FilterImplPerInstructionSet::Scalar);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    proptest::proptest! {
+        #[test]
+        fn test_filter_compare_scalar_and_avx512_impl_proptest(
+            start in proptest::prelude::any::<u32>(),
+            end in proptest::prelude::any::<u32>(),
+            offset in 0u32..2u32,
+            mut vals in proptest::collection::vec(0..u32::MAX, 0..30)) {
+            if FilterImplPerInstructionSet::AVX512.is_available() {
+                let mut vals_clone = vals.clone();
+                FilterImplPerInstructionSet::AVX512.filter_vec_in_place(start..=end, offset, &mut vals);
+                FilterImplPerInstructionSet::Scalar.filter_vec_in_place(start..=end, offset, &mut vals_clone);
+                assert_eq!(&vals, &vals_clone);
+            }
+       }
     }
 
     #[cfg(target_arch = "x86_64")]

@@ -5,7 +5,7 @@ extern crate test;
 #[cfg(test)]
 mod tests {
     use rand::seq::IteratorRandom;
-    use rand::thread_rng;
+    use rand::{thread_rng, Rng, SeedableRng};
     use tantivy_bitpacker::{BitPacker, BitUnpacker, BlockedBitpacker};
     use test::Bencher;
 
@@ -60,6 +60,47 @@ mod tests {
                 blocked_bitpacker.add(val * val);
             }
             blocked_bitpacker
+        });
+    }
+
+    fn create_filter_data(num_els: usize) -> Vec<u32> {
+        let mut rng = rand::rngs::StdRng::from_seed([42u8; 32]);
+        (0..num_els).map(|_| rng.gen_range(0..128u32)).collect()
+    }
+
+    #[bench]
+    fn bench_filter_vec_scalar(b: &mut Bencher) {
+        let data = create_filter_data(100_000);
+        let range = 0u32..=63u32;
+        b.iter(|| {
+            let mut output = data.clone();
+            tantivy_bitpacker::filter_vec_in_place_scalar(range.clone(), 0, &mut output);
+            output
+        });
+    }
+
+    #[bench]
+    fn bench_filter_vec_avx2(b: &mut Bencher) {
+        let data = create_filter_data(100_000);
+        let range = 0u32..=63u32;
+        b.iter(|| {
+            let mut output = data.clone();
+            tantivy_bitpacker::filter_vec_in_place_avx2(range.clone(), 0, &mut output);
+            output
+        });
+    }
+
+    #[bench]
+    fn bench_filter_vec_avx512(b: &mut Bencher) {
+        if !is_x86_feature_detected!("avx512f") {
+            return;
+        }
+        let data = create_filter_data(100_000);
+        let range = 0u32..=63u32;
+        b.iter(|| {
+            let mut output = data.clone();
+            tantivy_bitpacker::filter_vec_in_place_avx512(range.clone(), 0, &mut output);
+            output
         });
     }
 }
